@@ -90,6 +90,7 @@ describe("SessionRegistry", () => {
     telegramBotToken: "bot-token",
     telegramAllowedUserIds: [123],
     telegramAllowedUserIdSet: new Set([123]),
+    workspaceRoot: "/workspace/base",
     workspace: "/workspace/base",
     maxFileSize: 20 * 1024 * 1024,
     codexApiKey: "codex-key",

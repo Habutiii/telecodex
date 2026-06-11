@@ -1,3 +1,7 @@
+import { mkdirSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+
 import { vi } from "vitest";
 
 import { createDefaultLaunchProfile, createLaunchProfile } from "../src/codex-launch.js";
@@ -99,6 +103,7 @@ describe("CodexSessionService", () => {
     telegramBotToken: "bot-token",
     telegramAllowedUserIds: [123],
     telegramAllowedUserIdSet: new Set([123]),
+    workspaceRoot: "/workspace/base",
     workspace: "/workspace/base",
     maxFileSize: 20 * 1024 * 1024,
     codexApiKey: "codex-key",
@@ -958,13 +963,25 @@ describe("CodexSessionService", () => {
     expect(mockCodexState.listThreads).toHaveBeenCalledWith(5);
   });
 
-  it("listWorkspaces delegates to codex-state", async () => {
-    mockCodexState.listWorkspaces.mockReturnValue(["/workspace/a", "/workspace/b"]);
+  it("listWorkspaces lists the configured root and direct child directories", async () => {
+    const workspaceRoot = path.join(tmpdir(), `telecodex-workspaces-${Date.now()}`);
+    mkdirSync(path.join(workspaceRoot, "alpha"), { recursive: true });
+    mkdirSync(path.join(workspaceRoot, "beta"), { recursive: true });
+    mkdirSync(path.join(workspaceRoot, ".hidden"), { recursive: true });
 
-    const service = await CodexSessionService.create(createConfig());
+    try {
+      const service = await CodexSessionService.create(
+        createConfig({ workspaceRoot, workspace: workspaceRoot }),
+      );
 
-    expect(service.listWorkspaces()).toEqual(["/workspace/a", "/workspace/b"]);
-    expect(mockCodexState.listWorkspaces).toHaveBeenCalledTimes(1);
+      expect(service.listWorkspaces()).toEqual([
+        workspaceRoot,
+        path.join(workspaceRoot, "alpha"),
+        path.join(workspaceRoot, "beta"),
+      ]);
+    } finally {
+      rmSync(workspaceRoot, { recursive: true, force: true });
+    }
   });
 
   it("listModels delegates to codex-state", async () => {

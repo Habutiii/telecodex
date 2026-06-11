@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -15,6 +15,7 @@ describe("loadConfig", () => {
     process.env = { ...originalEnv };
     delete process.env.TELEGRAM_BOT_TOKEN;
     delete process.env.TELEGRAM_ALLOWED_USER_IDS;
+    delete process.env.TELECODEX_WORKSPACE_ROOT;
     delete process.env.CODEX_API_KEY;
     delete process.env.CODEX_MODEL;
     delete process.env.CODEX_SANDBOX_MODE;
@@ -66,6 +67,7 @@ describe("loadConfig", () => {
       telegramBotToken: "bot-token",
       telegramAllowedUserIds: [123, 456],
       telegramAllowedUserIdSet: new Set([123, 456]),
+      workspaceRoot: process.cwd(),
       workspace: process.cwd(),
       maxFileSize: 20 * 1024 * 1024,
       codexApiKey: "secret-key",
@@ -144,6 +146,7 @@ describe("loadConfig", () => {
     expect(config.showTurnTokenUsage).toBe(false);
     expect(config.enableTelegramLogin).toBe(true);
     expect(config.enableTelegramReactions).toBe(false);
+    expect(config.workspaceRoot).toBe(process.cwd());
     expect(config.workspace).toBe(process.cwd());
   });
 
@@ -213,14 +216,47 @@ describe("loadConfig", () => {
     expect(process.env.EXTRA_MULTILINE).toBe("hello\nworld");
   });
 
-  it("resolves workspace to /workspace when running in Docker", () => {
+  it("resolves workspace root to the current working directory by default", () => {
     process.env.TELEGRAM_BOT_TOKEN = "bot-token";
     process.env.TELEGRAM_ALLOWED_USER_IDS = "123";
-    process.env.container = "docker";
 
     const config = loadConfig();
 
-    expect(config.workspace).toBe("/workspace");
+    expect(config.workspaceRoot).toBe(process.cwd());
+    expect(config.workspace).toBe(process.cwd());
+  });
+
+  it("uses TELECODEX_WORKSPACE_ROOT as the default workspace root", () => {
+    const workspaceRoot = path.join(tempDir, "projects");
+    mkdirSync(workspaceRoot);
+    process.env.TELEGRAM_BOT_TOKEN = "bot-token";
+    process.env.TELEGRAM_ALLOWED_USER_IDS = "123";
+    process.env.TELECODEX_WORKSPACE_ROOT = workspaceRoot;
+
+    const config = loadConfig();
+
+    expect(config.workspaceRoot).toBe(workspaceRoot);
+    expect(config.workspace).toBe(workspaceRoot);
+  });
+
+  it("resolves relative TELECODEX_WORKSPACE_ROOT values from the current working directory", () => {
+    mkdirSync(path.join(tempDir, "projects"));
+    process.env.TELEGRAM_BOT_TOKEN = "bot-token";
+    process.env.TELEGRAM_ALLOWED_USER_IDS = "123";
+    process.env.TELECODEX_WORKSPACE_ROOT = "projects";
+
+    const config = loadConfig();
+
+    expect(config.workspaceRoot).toBe(path.join(tempDir, "projects"));
+    expect(config.workspace).toBe(path.join(tempDir, "projects"));
+  });
+
+  it("throws when TELECODEX_WORKSPACE_ROOT does not exist", () => {
+    process.env.TELEGRAM_BOT_TOKEN = "bot-token";
+    process.env.TELEGRAM_ALLOWED_USER_IDS = "123";
+    process.env.TELECODEX_WORKSPACE_ROOT = path.join(tempDir, "missing");
+
+    expect(() => loadConfig()).toThrow("TELECODEX_WORKSPACE_ROOT does not exist or is not readable");
   });
 
   it("parses MAX_FILE_SIZE when configured", () => {

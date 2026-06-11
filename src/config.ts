@@ -1,4 +1,5 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
+import { homedir } from "node:os";
 import path from "node:path";
 
 import {
@@ -19,6 +20,7 @@ export interface TeleCodexConfig {
   telegramBotToken: string;
   telegramAllowedUserIds: number[];
   telegramAllowedUserIdSet: Set<number>;
+  workspaceRoot: string;
   workspace: string;
   maxFileSize: number;
   codexApiKey?: string;
@@ -39,7 +41,8 @@ export function loadConfig(): TeleCodexConfig {
 
   const telegramBotToken = requireEnv("TELEGRAM_BOT_TOKEN");
   const telegramAllowedUserIds = parseAllowedUserIds(requireEnv("TELEGRAM_ALLOWED_USER_IDS"));
-  const workspace = resolveWorkspace();
+  const workspaceRoot = resolveWorkspaceRoot(optionalString(process.env.TELECODEX_WORKSPACE_ROOT));
+  const workspace = workspaceRoot;
   const maxFileSize = parseMaxFileSize(optionalString(process.env.MAX_FILE_SIZE));
   const codexApiKey = optionalString(process.env.CODEX_API_KEY);
   const codexModel = optionalString(process.env.CODEX_MODEL);
@@ -71,6 +74,7 @@ export function loadConfig(): TeleCodexConfig {
     telegramBotToken,
     telegramAllowedUserIds,
     telegramAllowedUserIdSet: new Set(telegramAllowedUserIds),
+    workspaceRoot,
     workspace,
     maxFileSize,
     codexApiKey,
@@ -87,20 +91,31 @@ export function loadConfig(): TeleCodexConfig {
   };
 }
 
-/**
- * Workspace is derived automatically:
- * - In Docker: /workspace (the mount point)
- * - Outside Docker: process.cwd()
- */
-function resolveWorkspace(): string {
-  if (isRunningInDocker()) {
-    return "/workspace";
+function resolveWorkspaceRoot(raw: string | undefined): string {
+  const workspaceRoot = path.resolve(expandHome(raw ?? process.cwd()));
+
+  try {
+    if (!statSync(workspaceRoot).isDirectory()) {
+      throw new Error(`TELECODEX_WORKSPACE_ROOT is not a directory: ${workspaceRoot}`);
+    }
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith("TELECODEX_WORKSPACE_ROOT")) {
+      throw error;
+    }
+    throw new Error(`TELECODEX_WORKSPACE_ROOT does not exist or is not readable: ${workspaceRoot}`);
   }
-  return process.cwd();
+
+  return workspaceRoot;
 }
 
-function isRunningInDocker(): boolean {
-  return existsSync("/.dockerenv") || process.env.container === "docker";
+function expandHome(value: string): string {
+  if (value === "~") {
+    return homedir();
+  }
+  if (value.startsWith("~/")) {
+    return path.join(homedir(), value.slice(2));
+  }
+  return value;
 }
 
 function loadEnvFile(envPath: string): void {

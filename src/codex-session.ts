@@ -1,3 +1,6 @@
+import { readdirSync, statSync } from "node:fs";
+import path from "node:path";
+
 import {
   Codex,
   type ApprovalMode,
@@ -14,7 +17,6 @@ import {
   getThread,
   listModels,
   listThreads,
-  listWorkspaces,
   type CodexModelRecord,
   type CodexThreadRecord,
 } from "./codex-state.js";
@@ -342,7 +344,7 @@ export class CodexSessionService {
   }
 
   listWorkspaces(): string[] {
-    return listWorkspaces();
+    return listWorkspaceDirectories(this.config.workspaceRoot, this.currentWorkspace);
   }
 
   listModels(): CodexModelRecord[] {
@@ -481,6 +483,37 @@ function getLaunchProfile(config: TeleCodexConfig, profileId: string): CodexLaun
     throw new Error(`Unknown launch profile: ${profileId}`);
   }
   return profile;
+}
+
+function listWorkspaceDirectories(workspaceRoot: string, currentWorkspace: string): string[] {
+  const root = path.resolve(workspaceRoot);
+  const current = path.resolve(currentWorkspace);
+  const directories = new Set<string>([root]);
+
+  try {
+    for (const entry of readdirSync(root, { withFileTypes: true })) {
+      if (entry.name.startsWith(".")) {
+        continue;
+      }
+
+      const fullPath = path.join(root, entry.name);
+      if (entry.isDirectory() || (entry.isSymbolicLink() && statSync(fullPath).isDirectory())) {
+        directories.add(fullPath);
+      }
+    }
+  } catch {
+    return [root];
+  }
+
+  if (current === root || current.startsWith(`${root}${path.sep}`)) {
+    directories.add(current);
+  }
+
+  return [...directories].sort((left, right) => {
+    if (left === root) return -1;
+    if (right === root) return 1;
+    return left.localeCompare(right);
+  });
 }
 
 function buildCodexEnv(apiKey?: string): Record<string, string> {

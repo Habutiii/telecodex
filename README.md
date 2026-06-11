@@ -50,6 +50,7 @@ TeleCodex is a Telegram bridge for the OpenAI Codex CLI SDK. It keeps a Codex th
    |---|---|---|
    | `TELEGRAM_BOT_TOKEN` | ✅ | Bot token from @BotFather |
    | `TELEGRAM_ALLOWED_USER_IDS` | ✅ | Comma-separated Telegram user IDs |
+   | `TELECODEX_WORKSPACE_ROOT` | — | Default workspace root; `/new` can select this directory or direct subdirectories (defaults to the bot process cwd) |
    | `CODEX_API_KEY` | — | API key for Codex (alternative to ChatGPT login) |
    | `CODEX_MODEL` | — | Default model, e.g. `gpt-5.4`, `o3` |
    | `CODEX_SANDBOX_MODE` | — | `read-only`, `workspace-write` *(default)*, `danger-full-access` |
@@ -75,7 +76,7 @@ TeleCodex is a Telegram bridge for the OpenAI Codex CLI SDK. It keeps a Codex th
 |---|---|
 | `/start` | Welcome & status (concise for returning users) |
 | `/help` | Grouped command reference |
-| `/new` | Start a fresh thread (workspace picker if multiple workspaces) |
+| `/new` | Start a fresh thread (workspace picker if the configured root has subdirectories) |
 | `/session` | Current thread ID, workspace, model, effort, and token totals |
 | `/sessions` | Browse recent threads grouped by workspace; tap to switch |
 | `/switch <id>` | Switch directly to a thread by ID |
@@ -149,7 +150,7 @@ The `SessionRegistry` maps context keys to `CodexSessionService` instances:
 
 - **First message** in a context → creates a new `CodexSessionService` → starts a new Codex thread
 - **Subsequent messages** → same context key → same session → conversation continues
-- **`/new`** → replaces the thread within the same context (optionally picking a workspace first)
+- **`/new`** → replaces the thread within the same context (optionally picking the configured workspace root or one of its direct subdirectories)
 - **`/sessions`** → lists all Codex threads from `~/.codex`, lets you switch within the current context
 - **`/attach <id>`** → resumes a specific Codex CLI thread (useful for picking up work started in the terminal)
 
@@ -239,7 +240,7 @@ That playbook covers:
 ## Security Notes
 
 - Only users in `TELEGRAM_ALLOWED_USER_IDS` can interact with the bot
-- Default sandbox mode is `workspace-write` — Codex can read and write within the working directory
+- Default sandbox mode is `workspace-write`
 - Use `danger-full-access` only if you fully trust the user and the host environment
 - The built-in `Full Access` profile and any extra `danger-full-access` launch profiles are opt-in via `ENABLE_UNSAFE_LAUNCH_PROFILES=true`
 - Default approval policy is `never` — suited for headless/automated use
