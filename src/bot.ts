@@ -28,7 +28,7 @@ import {
   type CodexSessionInfo,
   type CodexSessionService,
 } from "./codex-session.js";
-import { checkAuthStatus, clearAuthCache, startLogin, startLogout } from "./codex-auth.js";
+import { checkAuthStatus, clearAuthCache, startLogin } from "./codex-auth.js";
 import {
   findLaunchProfile,
   formatLaunchProfileBehavior,
@@ -42,7 +42,7 @@ import { contextKeyFromCtx, isTopicContextKey, parseContextKey, type TelegramCon
 import { friendlyErrorText } from "./error-messages.js";
 import { escapeHTML, formatTelegramHTML } from "./format.js";
 import { SessionRegistry } from "./session-registry.js";
-import { getAvailableBackends, transcribeAudio } from "./voice.js";
+import { transcribeAudio } from "./voice.js";
 
 const TELEGRAM_MESSAGE_LIMIT = 4000;
 const EDIT_DEBOUNCE_MS = 1500;
@@ -884,100 +884,6 @@ export function createBot(config: TeleCodexConfig, registry: SessionRegistry): B
 
     await safeReply(ctx, `<b>❌ Login failed.</b>\n\n<code>${escapeHTML(result.message)}</code>`, {
       fallbackText: `❌ Login failed.\n\n${result.message}`,
-    });
-  });
-
-  bot.command("logout", async (ctx) => {
-    if (!ctx.chat) {
-      return;
-    }
-
-    const authStatus = await checkAuthStatus(config.codexApiKey);
-    if (authStatus.method === "api-key") {
-      await safeReply(
-        ctx,
-        [
-          "<b>Cannot logout via Telegram when using CODEX_API_KEY.</b>",
-          "",
-          "Remove CODEX_API_KEY from .env to use CLI-based auth instead.",
-        ].join("\n"),
-        {
-          fallbackText: [
-            "Cannot logout via Telegram when using CODEX_API_KEY.",
-            "",
-            "Remove CODEX_API_KEY from .env to use CLI-based auth instead.",
-          ].join("\n"),
-        },
-      );
-      return;
-    }
-
-    if (!config.enableTelegramLogin) {
-      await safeReply(ctx, [
-        "<b>Telegram-initiated auth management is disabled.</b>",
-        "",
-        "Run <code>codex logout</code> on the host.",
-      ].join("\n"), {
-        fallbackText: [
-          "Telegram-initiated auth management is disabled.",
-          "",
-          "Run 'codex logout' on the host.",
-        ].join("\n"),
-      });
-      return;
-    }
-
-    if (!authStatus.authenticated) {
-      await safeReply(ctx, escapeHTML("Not currently authenticated."), {
-        fallbackText: "Not currently authenticated.",
-      });
-      return;
-    }
-
-    const result = await startLogout();
-    if (result.success) {
-      await safeReply(ctx, `<b>🔓 Logged out.</b>\n\n${escapeHTML(result.message)}`, {
-        fallbackText: `🔓 Logged out.\n\n${result.message}`,
-      });
-      return;
-    }
-
-    await safeReply(ctx, `<b>❌ Logout failed.</b>\n\n<code>${escapeHTML(result.message)}</code>`, {
-      fallbackText: `❌ Logout failed.\n\n${result.message}`,
-    });
-  });
-
-  bot.command("voice", async (ctx) => {
-    if (!ctx.chat) {
-      return;
-    }
-
-    const backends = await getAvailableBackends().catch(() => []);
-
-    if (backends.length === 0) {
-      await safeReply(
-        ctx,
-        [
-          "<b>Voice transcription is not available.</b>",
-          "",
-          "Install <code>parakeet-coreml</code> + ffmpeg, or set <code>OPENAI_API_KEY</code>.",
-          "<i>Note: voice transcription uses OPENAI_API_KEY, not CODEX_API_KEY.</i>",
-        ].join("\n"),
-        {
-          fallbackText: [
-            "Voice transcription is not available.",
-            "",
-            "Install parakeet-coreml + ffmpeg, or set OPENAI_API_KEY.",
-            "Note: voice transcription uses OPENAI_API_KEY, not CODEX_API_KEY.",
-          ].join("\n"),
-        },
-      );
-      return;
-    }
-
-    const joined = backends.join(" + ");
-    await safeReply(ctx, `<b>Voice backends:</b> <code>${escapeHTML(joined)}</code>`, {
-      fallbackText: `Voice backends: ${joined}`,
     });
   });
 
@@ -2228,8 +2134,6 @@ export async function registerCommands(bot: Bot<Context>): Promise<void> {
     { command: "auth", description: "Check auth status" },
     { command: "quota", description: "Codex quota status" },
     { command: "login", description: "Start authentication" },
-    { command: "logout", description: "Sign out" },
-    { command: "voice", description: "Voice transcription status" },
     { command: "handback", description: "Hand thread to Codex CLI" },
     { command: "attach", description: "Bind a Codex thread to this topic" },
     { command: "switch", description: "Switch to a thread by ID" },

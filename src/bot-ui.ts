@@ -47,7 +47,6 @@ export function renderHelpMessage(): DualText {
       commands: [
         ["/auth", "Check auth status"],
         ["/login", "Start authentication"],
-        ["/logout", "Sign out"],
       ],
     },
     {
@@ -56,7 +55,6 @@ export function renderHelpMessage(): DualText {
         ["/start", "Welcome & status"],
         ["/quota", "Codex quota status"],
         ["/help", "This reference"],
-        ["/voice", "Voice transcription status"],
       ],
     },
   ];
