@@ -41,6 +41,7 @@ import type { TeleCodexConfig, ToolVerbosity } from "./config.js";
 import { contextKeyFromCtx, isTopicContextKey, parseContextKey, type TelegramContextKey } from "./context-key.js";
 import { friendlyErrorText } from "./error-messages.js";
 import { escapeHTML, formatTelegramHTML } from "./format.js";
+import { retryAsync } from "./retry.js";
 import { SessionRegistry } from "./session-registry.js";
 import { TaskQueue } from "./task-queue.js";
 import { transcribeAudio } from "./voice.js";
@@ -56,6 +57,7 @@ const KEYBOARD_PAGE_SIZE = 6;
 const NOOP_PAGE_CALLBACK_DATA = "noop_page";
 const LAUNCH_PROFILES_COMMAND = "/launch_profiles";
 const AUTH_RETRY_DELAY_MS = 1_000;
+const PROMPT_STARTUP_MAX_RETRIES = 3;
 
 type TelegramChatId = number | string;
 type TelegramParseMode = "HTML";
@@ -89,6 +91,17 @@ type PromptDedupState = {
   activeSignature?: string;
   queuedSignatures: string[];
 };
+
+type PromptStartupFailure =
+  | { type: "auth"; detail: string }
+  | { type: "thread"; error: unknown };
+
+class PromptStartupError extends Error {
+  constructor(readonly failure: PromptStartupFailure) {
+    super(failure.type === "auth" ? failure.detail : formatError(failure.error));
+    this.name = "PromptStartupError";
+  }
+}
 
 function paginateKeyboard(items: KeyboardItem[], page: number, prefix: string): InlineKeyboard {
   const totalPages = Math.max(1, Math.ceil(items.length / KEYBOARD_PAGE_SIZE));
@@ -302,37 +315,147 @@ export function createBot(config: TeleCodexConfig, registry: SessionRegistry): B
     return state.activeSignature === signature || state.queuedSignatures.includes(signature);
   };
 
+  const sendPromptStartupFailure = async (ctx: Context, failure: PromptStartupFailure): Promise<void> => {
+    if (failure.type === "auth") {
+      await safeReply(
+        ctx,
+        [
+          "<b>⚠️ Codex is not authenticated.</b>",
+          "",
+          `<code>${escapeHTML(failure.detail)}</code>`,
+          "",
+          "Use /login to start authentication, or set CODEX_API_KEY on the host.",
+        ].join("\n"),
+        {
+          fallbackText: [
+            "⚠️ Codex is not authenticated.",
+            "",
+            failure.detail,
+            "",
+            "Use /login to start authentication, or set CODEX_API_KEY on the host.",
+          ].join("\n"),
+        },
+      );
+      return;
+    }
+
+    await safeReply(ctx, escapeHTML(`Failed to create thread: ${friendlyErrorText(failure.error)}`), {
+      fallbackText: `Failed to create thread: ${friendlyErrorText(failure.error)}`,
+    });
+  };
+
   const ensureActiveThread = async (
     ctx: Context,
     contextKey: TelegramContextKey,
     session: CodexSessionService,
-  ): Promise<boolean> => {
+    options?: { suppressErrorReply?: boolean; attempts?: number },
+  ): Promise<{ ok: true } | { ok: false; error: unknown }> => {
     if (session.hasActiveThread()) {
-      return true;
+      return { ok: true };
     }
 
-    try {
-      await session.newThread();
-      updateSessionMetadata(contextKey, session);
-      return true;
-    } catch (error) {
-      if (shouldRetryPromptStartupError(error)) {
+    const attempts = Math.max(1, options?.attempts ?? 2);
+    let lastError: unknown;
+
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      try {
+        await session.newThread();
+        updateSessionMetadata(contextKey, session);
+        return { ok: true };
+      } catch (error) {
+        lastError = error;
+        if (attempt + 1 >= attempts || !shouldRetryPromptStartupError(error)) {
+          break;
+        }
+
         clearAuthCache();
         await sleep(AUTH_RETRY_DELAY_MS);
-        try {
-          await session.newThread();
-          updateSessionMetadata(contextKey, session);
-          return true;
-        } catch (retryError) {
-          error = retryError;
-        }
       }
-
-      await safeReply(ctx, escapeHTML(`Failed to create thread: ${friendlyErrorText(error)}`), {
-        fallbackText: `Failed to create thread: ${friendlyErrorText(error)}`,
-      });
-      return false;
     }
+
+    if (!options?.suppressErrorReply) {
+      await sendPromptStartupFailure(ctx, { type: "thread", error: lastError });
+    }
+
+    return { ok: false, error: lastError };
+  };
+
+  const ensurePromptStartup = async (
+    ctx: Context,
+    contextKey: TelegramContextKey,
+    session: CodexSessionService,
+    options?: { authAttempts?: number; threadAttempts?: number; suppressErrorReply?: boolean },
+  ): Promise<{ ok: true } | { ok: false; failure: PromptStartupFailure }> => {
+    const authStatus = await checkAuthStatusWithRetry(config.codexApiKey, {
+      attempts: options?.authAttempts ?? 2,
+      delayMs: AUTH_RETRY_DELAY_MS,
+    });
+    if (!authStatus.authenticated && authStatus.method === "none") {
+      const failure: PromptStartupFailure = { type: "auth", detail: authStatus.detail };
+      if (!options?.suppressErrorReply) {
+        await sendPromptStartupFailure(ctx, failure);
+      }
+      return { ok: false, failure };
+    }
+
+    const threadResult = await ensureActiveThread(ctx, contextKey, session, {
+      suppressErrorReply: options?.suppressErrorReply,
+      attempts: options?.threadAttempts,
+    });
+    if (!threadResult.ok) {
+      return { ok: false, failure: { type: "thread", error: threadResult.error } };
+    }
+
+    return { ok: true };
+  };
+
+  const handlePromptWithStartupRetries = async (
+    ctx: Context,
+    contextKey: TelegramContextKey,
+    chatId: TelegramChatId,
+    session: CodexSessionService,
+    userInput: CodexPromptInput,
+  ): Promise<void> => {
+    try {
+      await retryAsync(
+        async () => {
+          const startup = await ensurePromptStartup(ctx, contextKey, session, {
+            authAttempts: 1,
+            threadAttempts: 1,
+            suppressErrorReply: true,
+          });
+          if (!startup.ok) {
+            throw new PromptStartupError(startup.failure);
+          }
+        },
+        {
+          maxRetries: PROMPT_STARTUP_MAX_RETRIES,
+          delayMs: AUTH_RETRY_DELAY_MS,
+          shouldRetry: (error) => {
+            if (!(error instanceof PromptStartupError)) {
+              return false;
+            }
+            if (error.failure.type === "auth") {
+              return true;
+            }
+            return shouldRetryPromptStartupError(error.failure.error);
+          },
+          onRetry: async () => {
+            clearAuthCache();
+            await setReaction(ctx, "👌");
+          },
+        },
+      );
+    } catch (error) {
+      if (error instanceof PromptStartupError) {
+        await sendPromptStartupFailure(ctx, error.failure);
+        return;
+      }
+      throw error;
+    }
+
+    await setReaction(ctx, "👀");
+    await handleUserPrompt(ctx, contextKey, chatId, session, userInput, { skipStartupChecks: true });
   };
 
   const enqueuePromptTask = async (
@@ -385,6 +508,7 @@ export function createBot(config: TeleCodexConfig, registry: SessionRegistry): B
     chatId: TelegramChatId,
     session: CodexSessionService,
     userInput: CodexPromptInput,
+    options?: { skipStartupChecks?: boolean },
   ): Promise<void> => {
     const parsed = parseContextKey(contextKey);
     const messageThreadId = parsed.messageThreadId;
@@ -770,35 +894,11 @@ export function createBot(config: TeleCodexConfig, registry: SessionRegistry): B
     };
 
     try {
-      const authStatus = await checkAuthStatusWithRetry(config.codexApiKey, {
-        attempts: 2,
-        delayMs: AUTH_RETRY_DELAY_MS,
-      });
-      if (!authStatus.authenticated && authStatus.method === "none") {
-        await safeReply(
-          ctx,
-          [
-            "<b>⚠️ Codex is not authenticated.</b>",
-            "",
-            `<code>${escapeHTML(authStatus.detail)}</code>`,
-            "",
-            "Use /login to start authentication, or set CODEX_API_KEY on the host.",
-          ].join("\n"),
-          {
-            fallbackText: [
-              "⚠️ Codex is not authenticated.",
-              "",
-              authStatus.detail,
-              "",
-              "Use /login to start authentication, or set CODEX_API_KEY on the host.",
-            ].join("\n"),
-          },
-        );
-        return;
-      }
-
-      if (!(await ensureActiveThread(ctx, contextKey, session))) {
-        return;
+      if (!options?.skipStartupChecks) {
+        const startup = await ensurePromptStartup(ctx, contextKey, session);
+        if (!startup.ok) {
+          return;
+        }
       }
 
       await session.prompt(userInput, callbacks);
@@ -1137,7 +1237,7 @@ export function createBot(config: TeleCodexConfig, registry: SessionRegistry): B
     await setReaction(ctx, "👀");
     await enqueuePromptTask(ctx, contextKey, cached, async () => {
       try {
-        await handleUserPrompt(ctx, contextKey, chatId, session, cached);
+        await handlePromptWithStartupRetries(ctx, contextKey, chatId, session, cached);
         await setReaction(ctx, "🎉");
       } catch {
         await clearReaction(ctx);
@@ -2017,7 +2117,7 @@ export function createBot(config: TeleCodexConfig, registry: SessionRegistry): B
     await setReaction(ctx, "👀");
     await enqueuePromptTask(ctx, contextKey, userText, async () => {
       try {
-        await handleUserPrompt(ctx, contextKey, ctx.chat.id, session, userText);
+        await handlePromptWithStartupRetries(ctx, contextKey, ctx.chat.id, session, userText);
         await setReaction(ctx, "🎉");
       } catch {
         await clearReaction(ctx);
@@ -2083,7 +2183,7 @@ export function createBot(config: TeleCodexConfig, registry: SessionRegistry): B
     await setReaction(ctx, "👀");
     await enqueuePromptTask(ctx, contextKey, transcript, async () => {
       try {
-        await handleUserPrompt(ctx, contextKey, chatId, session, transcript);
+        await handlePromptWithStartupRetries(ctx, contextKey, chatId, session, transcript);
         await setReaction(ctx, "🎉");
       } catch {
         await clearReaction(ctx);
@@ -2133,7 +2233,7 @@ export function createBot(config: TeleCodexConfig, registry: SessionRegistry): B
     await setReaction(ctx, "👀");
     await enqueuePromptTask(ctx, contextKey, promptInput, async () => {
       try {
-        await handleUserPrompt(ctx, contextKey, chatId, session, promptInput);
+        await handlePromptWithStartupRetries(ctx, contextKey, chatId, session, promptInput);
         await setReaction(ctx, "🎉");
       } catch {
         await clearReaction(ctx);
@@ -2227,7 +2327,7 @@ export function createBot(config: TeleCodexConfig, registry: SessionRegistry): B
     await setReaction(ctx, "👀");
     await enqueuePromptTask(ctx, contextKey, promptInput, async () => {
       try {
-        await handleUserPrompt(ctx, contextKey, chatId, session, promptInput);
+        await handlePromptWithStartupRetries(ctx, contextKey, chatId, session, promptInput);
         await setReaction(ctx, "🎉");
       } catch {
         await clearReaction(ctx);
