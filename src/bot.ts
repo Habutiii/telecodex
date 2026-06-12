@@ -28,7 +28,7 @@ import {
   type CodexSessionInfo,
   type CodexSessionService,
 } from "./codex-session.js";
-import { checkAuthStatus, clearAuthCache, startLogin } from "./codex-auth.js";
+import { checkAuthStatus, checkAuthStatusWithRetry, clearAuthCache, startLogin } from "./codex-auth.js";
 import {
   findLaunchProfile,
   formatLaunchProfileBehavior,
@@ -42,6 +42,7 @@ import { contextKeyFromCtx, isTopicContextKey, parseContextKey, type TelegramCon
 import { friendlyErrorText } from "./error-messages.js";
 import { escapeHTML, formatTelegramHTML } from "./format.js";
 import { SessionRegistry } from "./session-registry.js";
+import { TaskQueue } from "./task-queue.js";
 import { transcribeAudio } from "./voice.js";
 
 const TELEGRAM_MESSAGE_LIMIT = 4000;
@@ -54,6 +55,7 @@ const MAX_AUDIO_FILE_SIZE = 25 * 1024 * 1024;
 const KEYBOARD_PAGE_SIZE = 6;
 const NOOP_PAGE_CALLBACK_DATA = "noop_page";
 const LAUNCH_PROFILES_COMMAND = "/launch_profiles";
+const AUTH_RETRY_DELAY_MS = 1_000;
 
 type TelegramChatId = number | string;
 type TelegramParseMode = "HTML";
@@ -129,6 +131,9 @@ export function createBot(config: TeleCodexConfig, registry: SessionRegistry): B
   const pendingModelButtons = new Map<TelegramContextKey, KeyboardItem[]>();
   const pendingEffortButtons = new Map<TelegramContextKey, KeyboardItem[]>();
   const lastPromptInput = new Map<TelegramContextKey, CodexPromptInput>();
+  const promptQueue = new TaskQueue<TelegramContextKey>((contextKey, error) => {
+    console.error(`Queued prompt failed for ${contextKey}:`, formatError(error));
+  });
 
   registry.onRemove((key) => {
     contextBusy.delete(key);
@@ -137,6 +142,7 @@ export function createBot(config: TeleCodexConfig, registry: SessionRegistry): B
     pendingLaunchButtons.delete(key);
     pendingUnsafeLaunchConfirmations.delete(key);
     lastPromptInput.delete(key);
+    promptQueue.clearPending(key);
   });
 
   const getBusyState = (
@@ -153,7 +159,13 @@ export function createBot(config: TeleCodexConfig, registry: SessionRegistry): B
   const isBusy = (contextKey: TelegramContextKey): boolean => {
     const state = contextBusy.get(contextKey);
     const session = registry.get(contextKey);
-    return Boolean(state?.processing || state?.switching || state?.transcribing || session?.isProcessing());
+    return Boolean(
+      state?.processing ||
+        state?.switching ||
+        state?.transcribing ||
+        promptQueue.hasWork(contextKey) ||
+        session?.isProcessing(),
+    );
   };
 
   const getContextSession = async (
@@ -222,9 +234,13 @@ export function createBot(config: TeleCodexConfig, registry: SessionRegistry): B
     });
   };
 
-  const sendBusyReply = async (ctx: Context): Promise<void> => {
-    await safeReply(ctx, escapeHTML("Still working on previous message..."), {
-      fallbackText: "Still working on previous message...",
+  const sendQueuedReply = async (ctx: Context, aheadCount: number): Promise<void> => {
+    const queuedText =
+      aheadCount <= 1
+        ? "Queued. It will run after the current task finishes."
+        : `Queued. It will run after ${aheadCount} tasks ahead of it finish.`;
+    await safeReply(ctx, escapeHTML(queuedText), {
+      fallbackText: queuedText,
     });
   };
 
@@ -272,10 +288,33 @@ export function createBot(config: TeleCodexConfig, registry: SessionRegistry): B
       updateSessionMetadata(contextKey, session);
       return true;
     } catch (error) {
+      if (shouldRetryPromptStartupError(error)) {
+        clearAuthCache();
+        await sleep(AUTH_RETRY_DELAY_MS);
+        try {
+          await session.newThread();
+          updateSessionMetadata(contextKey, session);
+          return true;
+        } catch (retryError) {
+          error = retryError;
+        }
+      }
+
       await safeReply(ctx, escapeHTML(`Failed to create thread: ${friendlyErrorText(error)}`), {
         fallbackText: `Failed to create thread: ${friendlyErrorText(error)}`,
       });
       return false;
+    }
+  };
+
+  const enqueuePromptTask = async (
+    ctx: Context,
+    contextKey: TelegramContextKey,
+    run: () => Promise<void>,
+  ): Promise<void> => {
+    const { position } = promptQueue.enqueue(contextKey, run);
+    if (position > 0) {
+      await sendQueuedReply(ctx, position);
     }
   };
 
@@ -288,11 +327,6 @@ export function createBot(config: TeleCodexConfig, registry: SessionRegistry): B
   ): Promise<void> => {
     const parsed = parseContextKey(contextKey);
     const messageThreadId = parsed.messageThreadId;
-
-    if (isBusy(contextKey)) {
-      await sendBusyReply(ctx);
-      return;
-    }
 
     const busyState = getBusyState(contextKey);
     busyState.processing = true;
@@ -675,7 +709,10 @@ export function createBot(config: TeleCodexConfig, registry: SessionRegistry): B
     };
 
     try {
-      const authStatus = await checkAuthStatus(config.codexApiKey);
+      const authStatus = await checkAuthStatusWithRetry(config.codexApiKey, {
+        attempts: 2,
+        delayMs: AUTH_RETRY_DELAY_MS,
+      });
       if (!authStatus.authenticated && authStatus.method === "none") {
         await safeReply(
           ctx,
@@ -988,11 +1025,23 @@ export function createBot(config: TeleCodexConfig, registry: SessionRegistry): B
       return;
     }
 
-    const { session } = contextSession;
+    const { contextKey, session } = contextSession;
     try {
-      await session.abort();
-      await safeReply(ctx, escapeHTML("Aborted current operation"), {
-        fallbackText: "Aborted current operation",
+      const aborted = await session.abort();
+      if (!aborted) {
+        await safeReply(ctx, escapeHTML("Nothing to abort"), {
+          fallbackText: "Nothing to abort",
+        });
+        return;
+      }
+
+      const queuedCount = promptQueue.pendingCount(contextKey);
+      const text =
+        queuedCount > 0
+          ? `Aborted current operation. ${queuedCount} queued task${queuedCount === 1 ? "" : "s"} will continue automatically.`
+          : "Aborted current operation";
+      await safeReply(ctx, escapeHTML(text), {
+        fallbackText: text,
       });
     } catch (error) {
       await safeReply(ctx, `<b>Failed:</b> ${escapeHTML(friendlyErrorText(error))}`, {
@@ -1013,11 +1062,6 @@ export function createBot(config: TeleCodexConfig, registry: SessionRegistry): B
       return;
     }
 
-    if (isBusy(contextKey)) {
-      await sendBusyReply(ctx);
-      return;
-    }
-
     const cached = lastPromptInput.get(contextKey);
     if (!cached) {
       await safeReply(ctx, escapeHTML("Nothing to retry. Send a message first."), {
@@ -1027,12 +1071,14 @@ export function createBot(config: TeleCodexConfig, registry: SessionRegistry): B
     }
 
     await setReaction(ctx, "👀");
-    try {
-      await handleUserPrompt(ctx, contextKey, chatId, session, cached);
-      await setReaction(ctx, "👍");
-    } catch {
-      await clearReaction(ctx);
-    }
+    await enqueuePromptTask(ctx, contextKey, async () => {
+      try {
+        await handleUserPrompt(ctx, contextKey, chatId, session, cached);
+        await setReaction(ctx, "👍");
+      } catch {
+        await clearReaction(ctx);
+      }
+    });
   });
 
   bot.command("session", async (ctx) => {
@@ -1502,7 +1548,7 @@ export function createBot(config: TeleCodexConfig, registry: SessionRegistry): B
     }
 
     const session = registry.get(contextKey);
-    if (!session) {
+    if (!session || !session.isProcessing()) {
       await ctx.answerCallbackQuery({ text: "Nothing to abort" });
       return;
     }
@@ -1905,12 +1951,14 @@ export function createBot(config: TeleCodexConfig, registry: SessionRegistry): B
     const { contextKey, session } = contextSession;
     lastPromptInput.set(contextKey, userText);
     await setReaction(ctx, "👀");
-    try {
-      await handleUserPrompt(ctx, contextKey, ctx.chat.id, session, userText);
-      await setReaction(ctx, "👍");
-    } catch {
-      await clearReaction(ctx);
-    }
+    await enqueuePromptTask(ctx, contextKey, async () => {
+      try {
+        await handleUserPrompt(ctx, contextKey, ctx.chat.id, session, userText);
+        await setReaction(ctx, "👍");
+      } catch {
+        await clearReaction(ctx);
+      }
+    });
   });
 
   bot.on(["message:voice", "message:audio"], async (ctx) => {
@@ -1921,11 +1969,6 @@ export function createBot(config: TeleCodexConfig, registry: SessionRegistry): B
 
     const { contextKey, session } = contextSession;
     const chatId = ctx.chat.id;
-    if (isBusy(contextKey)) {
-      await sendBusyReply(ctx);
-      return;
-    }
-
     const fileId = ctx.message.voice?.file_id ?? ctx.message.audio?.file_id;
     if (!fileId) {
       return;
@@ -1974,12 +2017,14 @@ export function createBot(config: TeleCodexConfig, registry: SessionRegistry): B
 
     lastPromptInput.set(contextKey, transcript);
     await setReaction(ctx, "👀");
-    try {
-      await handleUserPrompt(ctx, contextKey, chatId, session, transcript);
-      await setReaction(ctx, "👍");
-    } catch {
-      await clearReaction(ctx);
-    }
+    await enqueuePromptTask(ctx, contextKey, async () => {
+      try {
+        await handleUserPrompt(ctx, contextKey, chatId, session, transcript);
+        await setReaction(ctx, "👍");
+      } catch {
+        await clearReaction(ctx);
+      }
+    });
   });
 
   bot.on("message:photo", async (ctx) => {
@@ -1990,11 +2035,6 @@ export function createBot(config: TeleCodexConfig, registry: SessionRegistry): B
 
     const { contextKey, session } = contextSession;
     const chatId = ctx.chat.id;
-    if (isBusy(contextKey)) {
-      await sendBusyReply(ctx);
-      return;
-    }
-
     const photos = ctx.message.photo;
     const photo = photos[photos.length - 1];
     if (!photo) {
@@ -2027,14 +2067,16 @@ export function createBot(config: TeleCodexConfig, registry: SessionRegistry): B
       lastPromptInput.set(contextKey, caption);
     }
     await setReaction(ctx, "👀");
-    try {
-      await handleUserPrompt(ctx, contextKey, chatId, session, promptInput);
-      await setReaction(ctx, "👍");
-    } catch {
-      await clearReaction(ctx);
-    } finally {
-      await unlink(tempFilePath).catch(() => {});
-    }
+    await enqueuePromptTask(ctx, contextKey, async () => {
+      try {
+        await handleUserPrompt(ctx, contextKey, chatId, session, promptInput);
+        await setReaction(ctx, "👍");
+      } catch {
+        await clearReaction(ctx);
+      } finally {
+        await unlink(tempFilePath).catch(() => {});
+      }
+    });
   });
 
   bot.on("message:document", async (ctx) => {
@@ -2045,11 +2087,6 @@ export function createBot(config: TeleCodexConfig, registry: SessionRegistry): B
 
     const { contextKey, session } = contextSession;
     const chatId = ctx.chat.id;
-    if (isBusy(contextKey)) {
-      await sendBusyReply(ctx);
-      return;
-    }
-
     const doc = ctx.message.document;
     if (!doc) {
       return;
@@ -2124,21 +2161,23 @@ export function createBot(config: TeleCodexConfig, registry: SessionRegistry): B
     }
 
     await setReaction(ctx, "👀");
-    try {
-      await handleUserPrompt(ctx, contextKey, chatId, session, promptInput);
-      await setReaction(ctx, "👍");
-    } catch {
-      await clearReaction(ctx);
-    } finally {
+    await enqueuePromptTask(ctx, contextKey, async () => {
       try {
-        await deliverArtifacts(ctx, chatId, outDir, parseContextKey(contextKey).messageThreadId);
-      } catch (artifactError) {
-        console.error("Failed to deliver artifacts:", artifactError);
+        await handleUserPrompt(ctx, contextKey, chatId, session, promptInput);
+        await setReaction(ctx, "👍");
+      } catch {
+        await clearReaction(ctx);
       } finally {
-        await cleanupInbox(workspace, turnId);
-        // TODO: prune old outbox turn folders by age or count to avoid unbounded growth
+        try {
+          await deliverArtifacts(ctx, chatId, outDir, parseContextKey(contextKey).messageThreadId);
+        } catch (artifactError) {
+          console.error("Failed to deliver artifacts:", artifactError);
+        } finally {
+          await cleanupInbox(workspace, turnId);
+          // TODO: prune old outbox turn folders by age or count to avoid unbounded growth
+        }
       }
-    }
+    });
   });
 
   bot.catch((error) => {
@@ -2696,6 +2735,17 @@ function isTelegramParseError(error: unknown): boolean {
 function renderPromptFailure(accumulatedText: string, error: unknown): string {
   const message = friendlyErrorText(error);
   return accumulatedText.trim() ? `${accumulatedText.trim()}\n\n⚠️ ${message}` : `⚠️ ${message}`;
+}
+
+function shouldRetryPromptStartupError(error: unknown): boolean {
+  const message = formatError(error);
+  return /auth|login|unauthorized|api.?key|configuration|no such file or directory|os error 2/i.test(message);
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 function formatError(error: unknown): string {

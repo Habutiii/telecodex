@@ -291,8 +291,13 @@ export class CodexSessionService {
     }
   }
 
-  async abort(): Promise<void> {
-    this.abortController?.abort();
+  async abort(): Promise<boolean> {
+    if (!this.abortController) {
+      return false;
+    }
+
+    this.abortController.abort();
+    return true;
   }
 
   async newThread(workspace?: string, model?: string): Promise<CodexSessionInfo> {

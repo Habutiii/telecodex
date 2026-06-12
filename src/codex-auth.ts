@@ -11,6 +11,11 @@ export interface LoginResult {
   message: string;
 }
 
+export interface AuthRetryOptions {
+  attempts?: number;
+  delayMs?: number;
+}
+
 const CODEX_CLI = "codex";
 const COMMAND_TIMEOUT_MS = 10_000;
 const AUTH_CACHE_TTL_MS = 30_000;
@@ -53,6 +58,32 @@ export async function checkAuthStatus(apiKey?: string): Promise<AuthStatus> {
   } catch (error) {
     return parseCommandError(error);
   }
+}
+
+export async function checkAuthStatusWithRetry(
+  apiKey?: string,
+  options: AuthRetryOptions = {},
+): Promise<AuthStatus> {
+  const attempts = Math.max(1, options.attempts ?? 2);
+  const delayMs = Math.max(0, options.delayMs ?? 1_000);
+
+  let status = await checkAuthStatus(apiKey);
+  if (status.authenticated || attempts === 1) {
+    return status;
+  }
+
+  for (let attempt = 1; attempt < attempts; attempt += 1) {
+    clearAuthCache();
+    if (delayMs > 0) {
+      await delay(delayMs);
+    }
+    status = await checkAuthStatus(apiKey);
+    if (status.authenticated) {
+      return status;
+    }
+  }
+
+  return status;
 }
 
 /**
@@ -184,4 +215,10 @@ function extractErrorMessage(error: unknown): string {
     }
   }
   return error instanceof Error ? error.message : String(error);
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }

@@ -6,7 +6,13 @@ vi.mock("node:child_process", () => ({
   execFile: mockExecFile,
 }));
 
-import { checkAuthStatus, clearAuthCache, startLogin, startLogout } from "../src/codex-auth.js";
+import {
+  checkAuthStatus,
+  checkAuthStatusWithRetry,
+  clearAuthCache,
+  startLogin,
+  startLogout,
+} from "../src/codex-auth.js";
 
 // Helper to make mockExecFile call its callback with success
 function mockExecSuccess(stdout: string, stderr = ""): void {
@@ -159,6 +165,33 @@ describe("codex-auth", () => {
       mockExecSuccess("Still logged in");
       await checkAuthStatus();
 
+      expect(mockExecFile).toHaveBeenCalledTimes(2);
+    });
+
+    it("retries silently before returning a final unauthenticated result", async () => {
+      mockExecFailure("Not logged in");
+
+      const status = await checkAuthStatusWithRetry(undefined, { attempts: 2, delayMs: 0 });
+
+      expect(status.authenticated).toBe(false);
+      expect(status.method).toBe("none");
+      expect(mockExecFile).toHaveBeenCalledTimes(2);
+    });
+
+    it("recovers during the silent retry window", async () => {
+      mockExecFile.mockImplementationOnce((_cmd: string, _args: string[], _opts: unknown, cb: Function) => {
+        const error = new Error("Command failed") as Error & { stderr?: string; stdout?: string };
+        error.stderr = "Not logged in";
+        error.stdout = "";
+        cb(error, "", "Not logged in");
+      });
+      mockExecSuccess("Logged in as user@example.com");
+
+      const status = await checkAuthStatusWithRetry(undefined, { attempts: 2, delayMs: 0 });
+
+      expect(status.authenticated).toBe(true);
+      expect(status.method).toBe("cli");
+      expect(status.detail).toContain("user@example.com");
       expect(mockExecFile).toHaveBeenCalledTimes(2);
     });
   });
