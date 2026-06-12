@@ -22,10 +22,10 @@ describe("bot-ui", () => {
       expect(plain).toContain("/launch_profiles");
     });
 
-    it("lists all 18 commands", () => {
+    it("lists all 19 commands", () => {
       const { plain } = renderHelpMessage();
       const commandMatches = plain.match(/\/\w+/g) ?? [];
-      expect(commandMatches.length).toBe(18);
+      expect(commandMatches.length).toBe(19);
     });
 
     it("returns valid HTML with bold tags", () => {
@@ -174,6 +174,7 @@ describe("bot-ui", () => {
             relativeTime: "2h ago",
             model: "gpt-5.4",
             isActive: true,
+            boundContextLabels: ["Project Chat / topic 42"],
           },
         ],
         1,
@@ -183,6 +184,7 @@ describe("bot-ui", () => {
       expect(html).toContain("Improve sessions UX");
       expect(html).toContain("telecodex · 2h ago · gpt-5.4");
       expect(html).toContain("The /sessions function is hard to understand");
+      expect(html).toContain("Telegram: Project Chat / topic 42");
       expect(plain).toContain("1. ✅ Improve sessions UX");
     });
 

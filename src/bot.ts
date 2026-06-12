@@ -35,6 +35,7 @@ import {
   formatLaunchProfileLabel,
 } from "./codex-launch.js";
 import { formatQuotaHTML, formatQuotaPlain, readCodexQuota } from "./codex-quota.js";
+import { normalizeThreadName, renameCodexThread } from "./codex-rename.js";
 import { getThread } from "./codex-state.js";
 import type { TeleCodexConfig, ToolVerbosity } from "./config.js";
 import { contextKeyFromCtx, isTopicContextKey, parseContextKey, type TelegramContextKey } from "./context-key.js";
@@ -117,6 +118,7 @@ export function createBot(config: TeleCodexConfig, registry: SessionRegistry): B
     TelegramContextKey,
     { processing: boolean; switching: boolean; transcribing: boolean }
   >();
+  const contextLabels = new Map<TelegramContextKey, string>();
   const pendingSessionPicks = new Map<TelegramContextKey, string[]>();
   const pendingWorkspacePicks = new Map<TelegramContextKey, string[]>();
   const pendingSessionButtons = new Map<TelegramContextKey, KeyboardItem[]>();
@@ -130,6 +132,7 @@ export function createBot(config: TeleCodexConfig, registry: SessionRegistry): B
 
   registry.onRemove((key) => {
     contextBusy.delete(key);
+    contextLabels.delete(key);
     pendingLaunchPicks.delete(key);
     pendingLaunchButtons.delete(key);
     pendingUnsafeLaunchConfirmations.delete(key);
@@ -162,12 +165,17 @@ export function createBot(config: TeleCodexConfig, registry: SessionRegistry): B
       return null;
     }
 
+    contextLabels.set(contextKey, getTelegramContextLabel(ctx, contextKey));
     const session = await registry.getOrCreate(contextKey, options);
     return { contextKey, session };
   };
 
   const updateSessionMetadata = (contextKey: TelegramContextKey, session: CodexSessionService): void => {
     registry.updateMetadata(contextKey, session);
+    const label = contextLabels.get(contextKey);
+    if (label) {
+      registry.updateContextLabel(contextKey, label);
+    }
   };
 
   const isTopicContext = (contextKey: TelegramContextKey): boolean => isTopicContextKey(contextKey);
@@ -1102,13 +1110,52 @@ export function createBot(config: TeleCodexConfig, registry: SessionRegistry): B
 
     const plainLines = [`${contextLabel}:`, renderSessionInfoPlain(info)];
     const htmlLines = [`<b>${escapeHTML(contextLabel)}:</b>`, renderSessionInfoHTML(info)];
-    const sessionMatch = renderSessionSelectionMatch(info, session);
+    const sessionMatch = renderSessionSelectionMatch(info, session, registry);
     if (sessionMatch) {
       plainLines.push("", sessionMatch.plain);
       htmlLines.push("", sessionMatch.html);
     }
 
     await safeReply(ctx, htmlLines.join("\n"), { fallbackText: plainLines.join("\n") });
+  });
+
+  bot.command("rename", async (ctx) => {
+    const contextSession = await getContextSession(ctx, { deferThreadStart: true });
+    if (!contextSession) {
+      return;
+    }
+
+    const { contextKey, session } = contextSession;
+    if (isBusy(contextKey)) {
+      await safeReply(ctx, escapeHTML("Cannot rename while a prompt is running."), {
+        fallbackText: "Cannot rename while a prompt is running.",
+      });
+      return;
+    }
+
+    const info = session.getInfo();
+    if (!info.threadId) {
+      await safeReply(ctx, escapeHTML("No active thread to rename."), {
+        fallbackText: "No active thread to rename.",
+      });
+      return;
+    }
+
+    const rawText = ctx.message?.text ?? "";
+    const rawName = rawText.replace(/^\/rename(?:@\w+)?\s*/, "");
+    try {
+      const name = normalizeThreadName(rawName);
+      await renameCodexThread(info.threadId, name, config.codexApiKey);
+      const refreshed = getThread(info.threadId);
+      const displayName = refreshed?.title || name;
+      await safeReply(ctx, `<b>Renamed session:</b> ${escapeHTML(displayName)}`, {
+        fallbackText: `Renamed session: ${displayName}`,
+      });
+    } catch (error) {
+      await safeReply(ctx, `<b>Failed:</b> ${escapeHTML(friendlyErrorText(error))}`, {
+        fallbackText: `Failed: ${friendlyErrorText(error)}`,
+      });
+    }
   });
 
   const openLaunchProfilesPicker = async (ctx: Context): Promise<void> => {
@@ -1410,6 +1457,9 @@ export function createBot(config: TeleCodexConfig, registry: SessionRegistry): B
       relativeTime: formatRelativeTime(listedSession.updatedAt),
       model: listedSession.model || undefined,
       isActive: listedSession.id === activeThreadId,
+      boundContextLabels: registry
+        .listContextsForThread(listedSession.id)
+        .map((context) => context.label ?? context.contextKey),
     }));
     const message = renderSessionListMessage(previewItems, orderedSessions.length);
 
@@ -2169,6 +2219,7 @@ export async function registerCommands(bot: Bot<Context>): Promise<void> {
     { command: "new", description: "Start a new thread" },
     { command: "session", description: "Current thread details" },
     { command: "sessions", description: "Browse & switch threads" },
+    { command: "rename", description: "Rename current thread" },
     { command: "retry", description: "Resend the last prompt" },
     { command: "abort", description: "Cancel current operation" },
     { command: "launch_profiles", description: "Select launch profile" },
@@ -2222,6 +2273,7 @@ function renderSessionInfoHTML(info: CodexSessionInfo): string {
 function renderSessionSelectionMatch(
   info: CodexSessionInfo,
   session: Pick<CodexSessionService, "listAllSessions">,
+  registry: Pick<SessionRegistry, "listContextsForThread">,
 ): { html: string; plain: string } | undefined {
   if (!info.threadId) {
     return undefined;
@@ -2246,11 +2298,16 @@ function renderSessionSelectionMatch(
   const listPosition = sessionIndex >= 0 ? `#${sessionIndex + 1} in /sessions` : "not in the first 50 /sessions results";
   const title = trimLine(listedSession.title || listedSession.firstUserMessage || "(untitled)", 180);
   const firstPrompt = trimLine(listedSession.firstUserMessage, 320);
+  const telegramBindings = registry
+    .listContextsForThread(info.threadId)
+    .map((context) => context.label ?? context.contextKey)
+    .join(", ");
 
   const plainLines = [
     "Sessions match:",
     `List position: ${listPosition}`,
     `Button label: ${selectionLabel}`,
+    telegramBindings ? `Telegram: ${telegramBindings}` : undefined,
     `Title: ${title}`,
     firstPrompt ? `First prompt: ${firstPrompt}` : undefined,
     `Updated: ${relativeTime}`,
@@ -2260,6 +2317,7 @@ function renderSessionSelectionMatch(
     "<b>Sessions match:</b>",
     `<b>List position:</b> <code>${escapeHTML(listPosition)}</code>`,
     `<b>Button label:</b> <code>${escapeHTML(selectionLabel)}</code>`,
+    telegramBindings ? `<b>Telegram:</b> ${escapeHTML(telegramBindings)}` : undefined,
     `<b>Title:</b> ${escapeHTML(title)}`,
     firstPrompt ? `<b>First prompt:</b> ${escapeHTML(firstPrompt)}` : undefined,
     `<b>Updated:</b> <code>${escapeHTML(relativeTime)}</code>`,
@@ -2631,6 +2689,31 @@ function trimLine(text: string, maxLength: number): string {
 
 function getWorkspaceShortName(workspace: string): string {
   return workspace.split(/[\\/]/).filter(Boolean).pop() ?? workspace;
+}
+
+function getTelegramContextLabel(ctx: Context, contextKey: TelegramContextKey): string {
+  const chat = ctx.chat as
+    | {
+        title?: string;
+        username?: string;
+        first_name?: string;
+        last_name?: string;
+        type?: string;
+      }
+    | undefined;
+  const parsed = parseContextKey(contextKey);
+  const chatName =
+    chat?.title ??
+    (chat?.username ? `@${chat.username}` : undefined) ??
+    [chat?.first_name, chat?.last_name].filter(Boolean).join(" ") ??
+    `Chat ${parsed.chatId}`;
+  const base = chatName.trim() || `Chat ${parsed.chatId}`;
+
+  if (parsed.messageThreadId !== undefined) {
+    return `${base} / topic ${parsed.messageThreadId}`;
+  }
+
+  return chat?.type === "private" ? base : `${base} / chat`;
 }
 
 function formatRelativeTime(date: Date): string {

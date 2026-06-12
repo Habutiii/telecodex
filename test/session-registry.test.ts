@@ -399,6 +399,32 @@ describe("SessionRegistry", () => {
     ]);
   });
 
+  it("stores labels for contexts and lists them by thread", async () => {
+    const registry = new SessionRegistry(createConfig());
+    const session = (await registry.getOrCreate("123:42")) as any;
+
+    session.setInfo({
+      threadId: "thread-a",
+      workspace: "/workspace/a",
+      launchProfileId: "default",
+      launchProfileLabel: "Default",
+      launchProfileBehavior: "workspace-write / never",
+      sandboxMode: "workspace-write",
+      approvalPolicy: "never",
+      unsafeLaunch: false,
+    });
+    registry.updateMetadata("123:42", session as any);
+    registry.updateContextLabel("123:42", "Project Chat / topic 42");
+
+    expect(registry.listContextsForThread("thread-a")).toEqual([
+      expect.objectContaining({
+        contextKey: "123:42",
+        label: "Project Chat / topic 42",
+        threadId: "thread-a",
+      }),
+    ]);
+  });
+
   it("removes a context and disposes its session", async () => {
     const registry = new SessionRegistry(createConfig());
     const session = await registry.getOrCreate("123");

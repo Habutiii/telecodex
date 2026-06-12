@@ -10,6 +10,7 @@ export interface ContextMetadata {
   contextKey: TelegramContextKey;
   threadId: string | null;
   workspace: string;
+  label?: string;
   model?: string;
   reasoningEffort?: string;
   launchProfileId?: string;
@@ -69,6 +70,7 @@ export class SessionRegistry {
       contextKey,
       threadId: info.threadId,
       workspace: info.workspace,
+      ...(this.metadata.get(contextKey)?.label ? { label: this.metadata.get(contextKey)?.label } : {}),
       model: info.model,
       reasoningEffort: info.reasoningEffort,
       launchProfileId: info.nextLaunchProfileId ?? info.launchProfileId,
@@ -79,6 +81,24 @@ export class SessionRegistry {
 
   listContexts(): ContextMetadata[] {
     return [...this.metadata.values()].sort((left, right) => right.updatedAt - left.updatedAt);
+  }
+
+  listContextsForThread(threadId: string): ContextMetadata[] {
+    return this.listContexts().filter((context) => context.threadId === threadId);
+  }
+
+  updateContextLabel(contextKey: TelegramContextKey, label: string): void {
+    const existing = this.metadata.get(contextKey);
+    if (!existing) {
+      return;
+    }
+
+    if (existing.label === label) {
+      return;
+    }
+
+    this.metadata.set(contextKey, { ...existing, label });
+    this.persistMetadata();
   }
 
   onRemove(callback: (contextKey: TelegramContextKey) => void): void {

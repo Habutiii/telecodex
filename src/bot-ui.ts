@@ -13,6 +13,7 @@ export interface SessionListItem {
   relativeTime: string;
   model?: string;
   isActive: boolean;
+  boundContextLabels?: string[];
 }
 
 /**
@@ -26,6 +27,7 @@ export function renderHelpMessage(): DualText {
         ["/new", "Start a new thread"],
         ["/session", "Current thread details"],
         ["/sessions", "Browse & switch threads"],
+        ["/rename", "Rename current thread"],
         ["/attach", "Bind a Codex thread to this topic"],
         ["/handback", "Hand thread back to Codex CLI"],
         ["/abort", "Cancel current operation"],
@@ -188,6 +190,11 @@ export function renderSessionListMessage(items: SessionListItem[], totalCount: n
       const preview = trimLabel(firstMessage, 120);
       htmlLines.push(`<i>${escapeHTML(preview)}</i>`);
       plainLines.push(preview);
+    }
+    if (item.boundContextLabels?.length) {
+      const contexts = item.boundContextLabels.map((label) => trimLabel(label, 48)).join(", ");
+      htmlLines.push(`Telegram: ${escapeHTML(contexts)}`);
+      plainLines.push(`Telegram: ${contexts}`);
     }
 
     htmlLines.push("");
