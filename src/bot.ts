@@ -1102,6 +1102,11 @@ export function createBot(config: TeleCodexConfig, registry: SessionRegistry): B
 
     const plainLines = [`${contextLabel}:`, renderSessionInfoPlain(info)];
     const htmlLines = [`<b>${escapeHTML(contextLabel)}:</b>`, renderSessionInfoHTML(info)];
+    const sessionMatch = renderSessionSelectionMatch(info, session);
+    if (sessionMatch) {
+      plainLines.push("", sessionMatch.plain);
+      htmlLines.push("", sessionMatch.html);
+    }
 
     await safeReply(ctx, htmlLines.join("\n"), { fallbackText: plainLines.join("\n") });
   });
@@ -2212,6 +2217,58 @@ function renderSessionInfoHTML(info: CodexSessionInfo): string {
   ]
     .filter((line): line is string => Boolean(line))
     .join("\n");
+}
+
+function renderSessionSelectionMatch(
+  info: CodexSessionInfo,
+  session: Pick<CodexSessionService, "listAllSessions">,
+): { html: string; plain: string } | undefined {
+  if (!info.threadId) {
+    return undefined;
+  }
+
+  const listedSessions = session.listAllSessions(50);
+  const sessionIndex = listedSessions.findIndex((listedSession) => listedSession.id === info.threadId);
+  const listedSession = sessionIndex >= 0 ? listedSessions[sessionIndex] : getThread(info.threadId);
+  if (!listedSession) {
+    return undefined;
+  }
+
+  const relativeTime = formatRelativeTime(listedSession.updatedAt);
+  const selectionLabel = formatSessionLabel({
+    index: sessionIndex >= 0 ? sessionIndex + 1 : undefined,
+    workspace: listedSession.cwd,
+    title: listedSession.title || listedSession.firstUserMessage || "",
+    relativeTime,
+    model: listedSession.model || undefined,
+    isActive: true,
+  });
+  const listPosition = sessionIndex >= 0 ? `#${sessionIndex + 1} in /sessions` : "not in the first 50 /sessions results";
+  const title = trimLine(listedSession.title || listedSession.firstUserMessage || "(untitled)", 180);
+  const firstPrompt = trimLine(listedSession.firstUserMessage, 320);
+
+  const plainLines = [
+    "Sessions match:",
+    `List position: ${listPosition}`,
+    `Button label: ${selectionLabel}`,
+    `Title: ${title}`,
+    firstPrompt ? `First prompt: ${firstPrompt}` : undefined,
+    `Updated: ${relativeTime}`,
+  ].filter((line): line is string => Boolean(line));
+
+  const htmlLines = [
+    "<b>Sessions match:</b>",
+    `<b>List position:</b> <code>${escapeHTML(listPosition)}</code>`,
+    `<b>Button label:</b> <code>${escapeHTML(selectionLabel)}</code>`,
+    `<b>Title:</b> ${escapeHTML(title)}`,
+    firstPrompt ? `<b>First prompt:</b> ${escapeHTML(firstPrompt)}` : undefined,
+    `<b>Updated:</b> <code>${escapeHTML(relativeTime)}</code>`,
+  ].filter((line): line is string => Boolean(line));
+
+  return {
+    html: htmlLines.join("\n"),
+    plain: plainLines.join("\n"),
+  };
 }
 
 function renderLaunchSummaryPlain(info: CodexSessionInfo): string {
