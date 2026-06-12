@@ -85,6 +85,11 @@ type RenderedChunk = RenderedText & {
   sourceText: string;
 };
 
+type PromptDedupState = {
+  activeSignature?: string;
+  queuedSignatures: string[];
+};
+
 function paginateKeyboard(items: KeyboardItem[], page: number, prefix: string): InlineKeyboard {
   const totalPages = Math.max(1, Math.ceil(items.length / KEYBOARD_PAGE_SIZE));
   const currentPage = Math.min(Math.max(page, 0), totalPages - 1);
@@ -131,6 +136,7 @@ export function createBot(config: TeleCodexConfig, registry: SessionRegistry): B
   const pendingModelButtons = new Map<TelegramContextKey, KeyboardItem[]>();
   const pendingEffortButtons = new Map<TelegramContextKey, KeyboardItem[]>();
   const lastPromptInput = new Map<TelegramContextKey, CodexPromptInput>();
+  const promptDedup = new Map<TelegramContextKey, PromptDedupState>();
   const promptQueue = new TaskQueue<TelegramContextKey>((contextKey, error) => {
     console.error(`Queued prompt failed for ${contextKey}:`, formatError(error));
   });
@@ -142,6 +148,7 @@ export function createBot(config: TeleCodexConfig, registry: SessionRegistry): B
     pendingLaunchButtons.delete(key);
     pendingUnsafeLaunchConfirmations.delete(key);
     lastPromptInput.delete(key);
+    promptDedup.delete(key);
     promptQueue.clearPending(key);
   });
 
@@ -244,7 +251,7 @@ export function createBot(config: TeleCodexConfig, registry: SessionRegistry): B
     });
   };
 
-  const setReaction = async (ctx: Context, emoji: "👀" | "👍" | "❤" | "🔥" | "👏"): Promise<void> => {
+  const setReaction = async (ctx: Context, emoji: "👀" | "🎉" | "❤" | "🔥" | "👏" | "👌"): Promise<void> => {
     if (!config.enableTelegramReactions) {
       return;
     }
@@ -272,6 +279,27 @@ export function createBot(config: TeleCodexConfig, registry: SessionRegistry): B
     } catch {
       // Fail silently.
     }
+  };
+
+  const getPromptDedupState = (contextKey: TelegramContextKey): PromptDedupState => {
+    let state = promptDedup.get(contextKey);
+    if (!state) {
+      state = { queuedSignatures: [] };
+      promptDedup.set(contextKey, state);
+    }
+    return state;
+  };
+
+  const isDuplicateQueuedPrompt = (
+    contextKey: TelegramContextKey,
+    signature: string | undefined,
+  ): boolean => {
+    if (!signature) {
+      return false;
+    }
+
+    const state = getPromptDedupState(contextKey);
+    return state.activeSignature === signature || state.queuedSignatures.includes(signature);
   };
 
   const ensureActiveThread = async (
@@ -310,10 +338,43 @@ export function createBot(config: TeleCodexConfig, registry: SessionRegistry): B
   const enqueuePromptTask = async (
     ctx: Context,
     contextKey: TelegramContextKey,
+    userInput: CodexPromptInput,
     run: () => Promise<void>,
   ): Promise<void> => {
-    const { position } = promptQueue.enqueue(contextKey, run);
+    const signature = buildPromptSignature(userInput);
+    if (isDuplicateQueuedPrompt(contextKey, signature)) {
+      await clearReaction(ctx);
+      await safeReply(ctx, escapeHTML("Duplicate queued message discarded."), {
+        fallbackText: "Duplicate queued message discarded.",
+      });
+      return;
+    }
+
+    const state = getPromptDedupState(contextKey);
+    const wrappedRun = async (): Promise<void> => {
+      if (signature) {
+        state.activeSignature = signature;
+        state.queuedSignatures = state.queuedSignatures.filter((item) => item !== signature);
+      }
+
+      try {
+        await run();
+      } finally {
+        if (state.activeSignature === signature) {
+          state.activeSignature = undefined;
+        }
+        if (!state.activeSignature && state.queuedSignatures.length === 0) {
+          promptDedup.delete(contextKey);
+        }
+      }
+    };
+
+    const { position } = promptQueue.enqueue(contextKey, wrappedRun);
+    if (signature && position > 0) {
+      state.queuedSignatures.push(signature);
+    }
     if (position > 0) {
+      await setReaction(ctx, "👌");
       await sendQueuedReply(ctx, position);
     }
   };
@@ -956,15 +1017,18 @@ export function createBot(config: TeleCodexConfig, registry: SessionRegistry): B
   });
 
   bot.command("quota", async (ctx) => {
+    await setReaction(ctx, "👀");
     try {
       const quota = await readCodexQuota(config.codexApiKey);
       await safeReply(ctx, formatQuotaHTML(quota, escapeHTML), {
         fallbackText: formatQuotaPlain(quota),
       });
+      await setReaction(ctx, "🎉");
     } catch (error) {
       await safeReply(ctx, `<b>Failed to read quota:</b> ${escapeHTML(friendlyErrorText(error))}`, {
         fallbackText: `Failed to read quota: ${friendlyErrorText(error)}`,
       });
+      await clearReaction(ctx);
     }
   });
 
@@ -1071,10 +1135,10 @@ export function createBot(config: TeleCodexConfig, registry: SessionRegistry): B
     }
 
     await setReaction(ctx, "👀");
-    await enqueuePromptTask(ctx, contextKey, async () => {
+    await enqueuePromptTask(ctx, contextKey, cached, async () => {
       try {
         await handleUserPrompt(ctx, contextKey, chatId, session, cached);
-        await setReaction(ctx, "👍");
+        await setReaction(ctx, "🎉");
       } catch {
         await clearReaction(ctx);
       }
@@ -1951,10 +2015,10 @@ export function createBot(config: TeleCodexConfig, registry: SessionRegistry): B
     const { contextKey, session } = contextSession;
     lastPromptInput.set(contextKey, userText);
     await setReaction(ctx, "👀");
-    await enqueuePromptTask(ctx, contextKey, async () => {
+    await enqueuePromptTask(ctx, contextKey, userText, async () => {
       try {
         await handleUserPrompt(ctx, contextKey, ctx.chat.id, session, userText);
-        await setReaction(ctx, "👍");
+        await setReaction(ctx, "🎉");
       } catch {
         await clearReaction(ctx);
       }
@@ -2017,10 +2081,10 @@ export function createBot(config: TeleCodexConfig, registry: SessionRegistry): B
 
     lastPromptInput.set(contextKey, transcript);
     await setReaction(ctx, "👀");
-    await enqueuePromptTask(ctx, contextKey, async () => {
+    await enqueuePromptTask(ctx, contextKey, transcript, async () => {
       try {
         await handleUserPrompt(ctx, contextKey, chatId, session, transcript);
-        await setReaction(ctx, "👍");
+        await setReaction(ctx, "🎉");
       } catch {
         await clearReaction(ctx);
       }
@@ -2067,10 +2131,10 @@ export function createBot(config: TeleCodexConfig, registry: SessionRegistry): B
       lastPromptInput.set(contextKey, caption);
     }
     await setReaction(ctx, "👀");
-    await enqueuePromptTask(ctx, contextKey, async () => {
+    await enqueuePromptTask(ctx, contextKey, promptInput, async () => {
       try {
         await handleUserPrompt(ctx, contextKey, chatId, session, promptInput);
-        await setReaction(ctx, "👍");
+        await setReaction(ctx, "🎉");
       } catch {
         await clearReaction(ctx);
       } finally {
@@ -2161,10 +2225,10 @@ export function createBot(config: TeleCodexConfig, registry: SessionRegistry): B
     }
 
     await setReaction(ctx, "👀");
-    await enqueuePromptTask(ctx, contextKey, async () => {
+    await enqueuePromptTask(ctx, contextKey, promptInput, async () => {
       try {
         await handleUserPrompt(ctx, contextKey, chatId, session, promptInput);
-        await setReaction(ctx, "👍");
+        await setReaction(ctx, "🎉");
       } catch {
         await clearReaction(ctx);
       } finally {
@@ -2735,6 +2799,16 @@ function isTelegramParseError(error: unknown): boolean {
 function renderPromptFailure(accumulatedText: string, error: unknown): string {
   const message = friendlyErrorText(error);
   return accumulatedText.trim() ? `${accumulatedText.trim()}\n\n⚠️ ${message}` : `⚠️ ${message}`;
+}
+
+function buildPromptSignature(input: CodexPromptInput): string | undefined {
+  const text = typeof input === "string" ? input : input.text;
+  if (!text) {
+    return undefined;
+  }
+
+  const normalized = text.replace(/\s+/g, " ").trim();
+  return normalized || undefined;
 }
 
 function shouldRetryPromptStartupError(error: unknown): boolean {
