@@ -92,7 +92,7 @@ export class CodexSessionService {
 
   static async create(config: TeleCodexConfig, options?: CreateOptions): Promise<CodexSessionService> {
     const service = new CodexSessionService(config);
-    service.currentWorkspace = options?.workspace ?? config.workspace;
+    service.currentWorkspace = resolveLaunchWorkspace(options?.workspace ?? config.workspace, config.workspace);
     service.currentModel = options?.model ?? config.codexModel;
     service.currentReasoningEffort = options?.reasoningEffort as ModelReasoningEffort | undefined;
     service.currentLaunchProfile = getLaunchProfile(
@@ -298,7 +298,7 @@ export class CodexSessionService {
   async newThread(workspace?: string, model?: string): Promise<CodexSessionInfo> {
     this.ensureIdle("start a new thread");
 
-    const effectiveWorkspace = workspace ?? this.currentWorkspace;
+    const effectiveWorkspace = resolveLaunchWorkspace(workspace ?? this.currentWorkspace, this.config.workspace);
     const effectiveModel = model ?? this.currentModel;
     this.thread = this.getCodex().startThread(this.buildThreadOptions(effectiveWorkspace, effectiveModel));
     this.activeThreadLaunchProfile = this.currentLaunchProfile;
@@ -313,11 +313,13 @@ export class CodexSessionService {
   async resumeThread(threadId: string): Promise<CodexSessionInfo> {
     this.ensureIdle("resume a thread");
 
+    const workspace = resolveLaunchWorkspace(this.currentWorkspace, this.config.workspace);
     this.thread = this.getCodex().resumeThread(
       threadId,
-      this.buildThreadOptions(this.currentWorkspace, this.currentModel),
+      this.buildThreadOptions(workspace, this.currentModel),
     );
     this.activeThreadLaunchProfile = this.currentLaunchProfile;
+    this.currentWorkspace = workspace;
     this.currentThreadId = threadId;
     return this.getInfo();
   }
@@ -326,7 +328,7 @@ export class CodexSessionService {
     this.ensureIdle("switch session");
 
     const record = getThread(threadId);
-    const workspace = record?.cwd ?? this.currentWorkspace;
+    const workspace = resolveLaunchWorkspace(record?.cwd ?? this.currentWorkspace, this.config.workspace);
     const model = record?.model || undefined;
 
     this.thread = this.getCodex().resumeThread(threadId, this.buildThreadOptions(workspace, model));
@@ -344,7 +346,7 @@ export class CodexSessionService {
   }
 
   listWorkspaces(): string[] {
-    return listWorkspaceDirectories(this.config.workspaceRoot, this.currentWorkspace);
+    return listWorkspaceDirectories(this.config.workspaceRoot);
   }
 
   listModels(): CodexModelRecord[] {
@@ -485,9 +487,18 @@ function getLaunchProfile(config: TeleCodexConfig, profileId: string): CodexLaun
   return profile;
 }
 
-function listWorkspaceDirectories(workspaceRoot: string, currentWorkspace: string): string[] {
+function resolveLaunchWorkspace(workspace: string, fallbackWorkspace: string): string {
+  if (existsDirectory(workspace)) {
+    return workspace;
+  }
+  if (existsDirectory(fallbackWorkspace)) {
+    return fallbackWorkspace;
+  }
+  return workspace;
+}
+
+function listWorkspaceDirectories(workspaceRoot: string): string[] {
   const root = path.resolve(workspaceRoot);
-  const current = path.resolve(currentWorkspace);
   const directories = new Set<string>([root]);
 
   try {
@@ -503,13 +514,6 @@ function listWorkspaceDirectories(workspaceRoot: string, currentWorkspace: strin
     }
   } catch {
     return [root];
-  }
-
-  if (
-    (current === root || current.startsWith(`${root}${path.sep}`)) &&
-    existsDirectory(current)
-  ) {
-    directories.add(current);
   }
 
   return [...directories].sort((left, right) => {

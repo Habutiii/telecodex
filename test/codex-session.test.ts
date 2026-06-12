@@ -706,6 +706,34 @@ describe("CodexSessionService", () => {
     expect(service.getCurrentWorkspace()).toBe("/workspace/other");
   });
 
+  it("falls back to the configured workspace when a persisted workspace was deleted", async () => {
+    const workspaceRoot = path.join(tmpdir(), `telecodex-workspaces-${Date.now()}`);
+    const missingWorkspace = path.join(workspaceRoot, "deleted");
+    mkdirSync(workspaceRoot, { recursive: true });
+
+    try {
+      const service = await CodexSessionService.create(
+        createConfig({ workspaceRoot, workspace: workspaceRoot }),
+        { workspace: missingWorkspace, deferThreadStart: true },
+      );
+      const codexInstance = mockState.codexInstances[0];
+
+      const info = await service.newThread();
+
+      expect(codexInstance.startThread).toHaveBeenLastCalledWith({
+        model: "o3",
+        sandboxMode: "workspace-write",
+        workingDirectory: workspaceRoot,
+        approvalPolicy: "never",
+        skipGitRepoCheck: true,
+      });
+      expect(info.workspace).toBe(workspaceRoot);
+      expect(service.getCurrentWorkspace()).toBe(workspaceRoot);
+    } finally {
+      rmSync(workspaceRoot, { recursive: true, force: true });
+    }
+  });
+
   it("resumes a thread by id", async () => {
     const service = await CodexSessionService.create(createConfig());
     const codexInstance = mockState.codexInstances[0];
@@ -767,6 +795,40 @@ describe("CodexSessionService", () => {
       approvalPolicy: "never",
       unsafeLaunch: false,
     });
+  });
+
+  it("falls back to the configured workspace when switching to a thread with a deleted cwd", async () => {
+    const workspaceRoot = path.join(tmpdir(), `telecodex-workspaces-${Date.now()}`);
+    const missingWorkspace = path.join(workspaceRoot, "deleted");
+    mkdirSync(workspaceRoot, { recursive: true });
+    mockCodexState.getThread.mockReturnValue({
+      id: "thread-deleted",
+      title: "Deleted workspace",
+      cwd: missingWorkspace,
+      model: "gpt-5.4-mini",
+      createdAt: new Date("2025-01-01T00:00:00.000Z"),
+      updatedAt: new Date("2025-01-02T00:00:00.000Z"),
+      firstUserMessage: "hello",
+    });
+
+    try {
+      const service = await CodexSessionService.create(createConfig({ workspaceRoot, workspace: workspaceRoot }));
+      const codexInstance = mockState.codexInstances[0];
+
+      const info = await service.switchSession("thread-deleted");
+
+      expect(codexInstance.resumeThread).toHaveBeenLastCalledWith("thread-deleted", {
+        model: "gpt-5.4-mini",
+        sandboxMode: "workspace-write",
+        workingDirectory: workspaceRoot,
+        approvalPolicy: "never",
+        skipGitRepoCheck: true,
+      });
+      expect(info.workspace).toBe(workspaceRoot);
+      expect(service.getCurrentWorkspace()).toBe(workspaceRoot);
+    } finally {
+      rmSync(workspaceRoot, { recursive: true, force: true });
+    }
   });
 
   it("switchSession throws when a turn is in progress", async () => {
@@ -1000,6 +1062,32 @@ describe("CodexSessionService", () => {
       expect(service.listWorkspaces()).toEqual([
         workspaceRoot,
         path.join(workspaceRoot, "alpha"),
+      ]);
+    } finally {
+      rmSync(workspaceRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("listWorkspaces does not include an existing nested workspace from session history", async () => {
+    const workspaceRoot = path.join(tmpdir(), `telecodex-workspaces-${Date.now()}`);
+    const nestedParent = path.join(workspaceRoot, "nested");
+    const sessionHistoryWorkspace = path.join(nestedParent, "from-history");
+    mkdirSync(path.join(workspaceRoot, "alpha"), { recursive: true });
+    mkdirSync(sessionHistoryWorkspace, { recursive: true });
+
+    try {
+      const service = await CodexSessionService.create(
+        createConfig({
+          workspaceRoot,
+          workspace: workspaceRoot,
+        }),
+        { workspace: sessionHistoryWorkspace, deferThreadStart: true },
+      );
+
+      expect(service.listWorkspaces()).toEqual([
+        workspaceRoot,
+        path.join(workspaceRoot, "alpha"),
+        nestedParent,
       ]);
     } finally {
       rmSync(workspaceRoot, { recursive: true, force: true });

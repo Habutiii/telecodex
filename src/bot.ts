@@ -953,7 +953,7 @@ export function createBot(config: TeleCodexConfig, registry: SessionRegistry): B
     const workspaces = session.listWorkspaces();
     if (workspaces.length <= 1) {
       try {
-        const info = await session.newThread();
+        const info = await session.newThread(workspaces[0] ?? config.workspace);
         updateSessionMetadata(contextKey, session);
         const label = isTopicContext(contextKey) ? "New thread created for this topic." : "New thread created.";
         const plainText = `${label}\n\n${renderSessionInfoPlain(info)}`;
