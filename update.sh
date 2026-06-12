@@ -7,3 +7,5 @@ git pull
 npm run build
 sudo systemctl daemon-reload
 sudo systemctl restart telecodex
+
+echo "Update and restart complete!"
