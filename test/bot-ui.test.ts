@@ -22,10 +22,10 @@ describe("bot-ui", () => {
       expect(plain).toContain("/launch_profiles");
     });
 
-    it("lists all 19 commands", () => {
+    it("lists all 18 commands", () => {
       const { plain } = renderHelpMessage();
       const commandMatches = plain.match(/\/\w+/g) ?? [];
-      expect(commandMatches.length).toBe(19);
+      expect(commandMatches.length).toBe(18);
     });
 
     it("returns valid HTML with bold tags", () => {

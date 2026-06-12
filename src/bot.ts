@@ -981,7 +981,7 @@ export function createBot(config: TeleCodexConfig, registry: SessionRegistry): B
     });
   });
 
-  bot.command(["quota", "status"], async (ctx) => {
+  bot.command("quota", async (ctx) => {
     try {
       const quota = await readCodexQuota(config.codexApiKey);
       await safeReply(ctx, formatQuotaHTML(quota, escapeHTML), {
@@ -2226,7 +2226,6 @@ export async function registerCommands(bot: Bot<Context>): Promise<void> {
     { command: "model", description: "View & change model" },
     { command: "effort", description: "Set reasoning effort" },
     { command: "auth", description: "Check auth status" },
-    { command: "status", description: "Codex quota status" },
     { command: "quota", description: "Codex quota status" },
     { command: "login", description: "Start authentication" },
     { command: "logout", description: "Sign out" },
