@@ -84,7 +84,7 @@ TELEGRAM_BOT_TOKEN=...
 TELEGRAM_ALLOWED_USER_IDS=...
 TELECODEX_WORKSPACE_ROOT=/home/codex/workspaces
 
-CODEX_SANDBOX_MODE=workspace-write
+CODEX_SANDBOX_MODE=danger-full-access
 CODEX_APPROVAL_POLICY=never
 ENABLE_UNSAFE_LAUNCH_PROFILES=false
 
@@ -92,6 +92,13 @@ ENABLE_UNSAFE_LAUNCH_PROFILES=false
 # CODEX_MODEL=gpt-5.4
 # CODEX_API_KEY=...
 # SHOW_TURN_TOKEN_USAGE=true
+```
+
+For the simple full-access service setup, leave these unset:
+
+```bash
+CODEX_LAUNCH_PROFILES_JSON=
+CODEX_DEFAULT_LAUNCH_PROFILE=
 ```
 
 TeleCodex loads `.env` from its working directory. The systemd unit below also
@@ -113,12 +120,37 @@ The `codex` user must be able to traverse `/home/userA` and read the app files:
 
 ```bash
 sudo chgrp -R codex /home/userA/telecodex
-sudo chmod -R g+rX /home/userA/telecodex
-sudo chmod g+x /home/userA
+sudo find /home/userA/telecodex -type d -exec chmod 750 {} \;
+sudo find /home/userA/telecodex -type f -exec chmod 640 {} \;
+sudo chmod 750 /home/userA/telecodex/launchd/start.sh
+sudo setfacl -m u:codex:--x /home/userA
+```
+
+`setfacl` on `/home/userA` is cleaner than `chmod o+x /home/userA` because it
+grants traverse permission only to `codex`, not to every local user.
+
+If your distro does not have ACL support enabled, the fallback is:
+
+```bash
+sudo chmod o+x /home/userA
 ```
 
 Avoid giving `codex` write access to User A's home unless the service is
 intentionally allowed to modify the app source or update the env file.
+
+If you already changed permissions recursively in a way that removed executable
+bits from `dist/` or `node_modules/`, repair them after `npm install` and
+`npm run build`:
+
+```bash
+cd /home/userA/telecodex
+sudo chgrp -R codex dist node_modules
+sudo find dist node_modules -type d -exec chmod 750 {} \;
+sudo find dist node_modules -type f -exec chmod 640 {} \;
+sudo find node_modules/.bin -type f -exec chmod 750 {} \;
+sudo find node_modules/@openai -type f -name codex -exec chmod 750 {} \;
+sudo find node_modules -type f \( -name '*.sh' -o -name '*.node' \) -exec chmod 750 {} \;
+```
 
 ## 5. Authenticate Codex As The `codex` User
 
@@ -277,6 +309,14 @@ sudo passwd --status codex
 The status should show `L` on most Linux distributions, meaning the password is
 locked. If your distro uses different output, check `man passwd`.
 
+With `nologin`, normal `su codex` will fail. Use:
+
+```bash
+sudo -u codex -H bash -lc 'cd ~ && exec bash'
+```
+
+for maintenance commands under the `codex` identity.
+
 This prevents normal password-based login and prevents the `codex` user from
 changing its own password through the usual `passwd` flow. It does not stop root
 from changing the password, and it does not stop `codex` from doing privileged
@@ -291,6 +331,42 @@ codex ALL=(ALL) NOPASSWD: ALL
 If `codex` has broad root sudo, it can unlock itself, change `/etc/shadow`, or
 run `passwd` as root. Keep sudoers limited to exact operational commands.
 
+## Update After `git pull`
+
+When you update the checkout, rebuild before restarting the service. A typical
+update flow is:
+
+```bash
+cd /home/userA/telecodex
+git pull
+npm install
+npm run build
+sudo systemctl restart telecodex
+sudo journalctl -u telecodex -n 50 --no-pager
+```
+
+If the update changed `package-lock.json`, `package.json`, `dist/`, or
+`node_modules/`, and `codex` loses read or execute access afterward, reapply the
+runtime permissions:
+
+```bash
+cd /home/userA/telecodex
+sudo chgrp -R codex dist node_modules
+sudo find dist node_modules -type d -exec chmod 750 {} \;
+sudo find dist node_modules -type f -exec chmod 640 {} \;
+sudo find node_modules/.bin -type f -exec chmod 750 {} \;
+sudo find node_modules/@openai -type f -name codex -exec chmod 750 {} \;
+sudo find node_modules -type f \( -name '*.sh' -o -name '*.node' \) -exec chmod 750 {} \;
+sudo systemctl restart telecodex
+```
+
+If the update changed the systemd unit, reload systemd before restarting:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl restart telecodex
+```
+
 ## Troubleshooting
 
 - `Failed to start: TELEGRAM_BOT_TOKEN is required`: check the env file path and
@@ -299,7 +375,11 @@ run `passwd` as root. Keep sudoers limited to exact operational commands.
   or install Codex for the `codex` user.
 - Codex uses the wrong account: check `HOME`, `CODEX_HOME`, and
   `sudo -u codex -H codex login status`.
+- `Codex Exec exited with code 1: No such file or directory (os error 2)`:
+  check that `dist/` and `node_modules/` are readable by `codex`, and that
+  package executables still have execute bits after any recursive `chmod`.
 - Cannot read app files: check execute permission on `/home/userA` and read
-  permission on `/home/userA/telecodex`.
+  permission on `/home/userA/telecodex`, plus traverse permission on
+  `/home/userA` for `codex`.
 - Cannot write generated files: check `TELECODEX_WORKSPACE_ROOT` exists and is
   writable by `codex`.
