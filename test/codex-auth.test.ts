@@ -75,6 +75,15 @@ describe("codex-auth", () => {
       expect(status.detail).toContain("Not logged in");
     });
 
+    it("reports unknown when the auth probe fails for a non-auth reason", async () => {
+      mockExecFailure("Error loading configuration: No such file or directory (os error 2)");
+
+      const status = await checkAuthStatus();
+      expect(status.authenticated).toBe(false);
+      expect(status.method).toBe("unknown");
+      expect(status.detail).toContain("Error loading configuration");
+    });
+
     it("reports unauthenticated when CLI is not found", async () => {
       mockExecNotFound();
 
@@ -95,7 +104,7 @@ describe("codex-auth", () => {
 
       const status = await checkAuthStatus();
       expect(status.authenticated).toBe(false);
-      expect(status.method).toBe("none");
+      expect(status.method).toBe("unknown");
       expect(status.detail).toContain("SIGTERM");
     });
 

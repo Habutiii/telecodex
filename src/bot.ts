@@ -676,7 +676,7 @@ export function createBot(config: TeleCodexConfig, registry: SessionRegistry): B
 
     try {
       const authStatus = await checkAuthStatus(config.codexApiKey);
-      if (!authStatus.authenticated) {
+      if (!authStatus.authenticated && authStatus.method === "none") {
         await safeReply(
           ctx,
           [
@@ -795,7 +795,10 @@ export function createBot(config: TeleCodexConfig, registry: SessionRegistry): B
 
     const { contextKey, session } = contextSession;
     const authStatus = await checkAuthStatus(config.codexApiKey);
-    const authWarning = authStatus.authenticated ? undefined : "Not authenticated. Use /login or set CODEX_API_KEY.";
+    const authWarning =
+      authStatus.authenticated || authStatus.method !== "none"
+        ? undefined
+        : "Not authenticated. Use /login or set CODEX_API_KEY.";
     const isReturning = registry.hasMetadata(contextKey);
 
     if (isReturning) {
@@ -827,14 +830,19 @@ export function createBot(config: TeleCodexConfig, registry: SessionRegistry): B
     }
 
     const authStatus = await checkAuthStatus(config.codexApiKey);
-    const icon = authStatus.authenticated ? "✅" : "❌";
+    const icon = authStatus.authenticated ? "✅" : authStatus.method === "none" ? "❌" : "⚠️";
+    const statusLabel = authStatus.authenticated
+      ? "authenticated"
+      : authStatus.method === "none"
+        ? "not authenticated"
+        : "status check failed";
     const html = [
-      `<b>${icon} Auth status:</b> ${authStatus.authenticated ? "authenticated" : "not authenticated"}`,
+      `<b>${icon} Auth status:</b> ${statusLabel}`,
       `<b>Method:</b> <code>${escapeHTML(authStatus.method)}</code>`,
       `<b>Detail:</b> <code>${escapeHTML(authStatus.detail)}</code>`,
     ].join("\n");
     const plain = [
-      `${icon} Auth status: ${authStatus.authenticated ? "authenticated" : "not authenticated"}`,
+      `${icon} Auth status: ${statusLabel}`,
       `Method: ${authStatus.method}`,
       `Detail: ${authStatus.detail}`,
     ].join("\n");
@@ -852,6 +860,29 @@ export function createBot(config: TeleCodexConfig, registry: SessionRegistry): B
       await safeReply(ctx, `<b>✅ Already authenticated</b> via <code>${escapeHTML(authStatus.method)}</code>.`, {
         fallbackText: `✅ Already authenticated via ${authStatus.method}.`,
       });
+      return;
+    }
+
+    if (authStatus.method === "unknown") {
+      await safeReply(
+        ctx,
+        [
+          "<b>⚠️ Auth status check failed.</b>",
+          "",
+          `<code>${escapeHTML(authStatus.detail)}</code>`,
+          "",
+          "Try your prompt again. If this keeps happening, fix the Codex CLI configuration on the host.",
+        ].join("\n"),
+        {
+          fallbackText: [
+            "⚠️ Auth status check failed.",
+            "",
+            authStatus.detail,
+            "",
+            "Try your prompt again. If this keeps happening, fix the Codex CLI configuration on the host.",
+          ].join("\n"),
+        },
+      );
       return;
     }
 

@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 
 export interface AuthStatus {
   authenticated: boolean;
-  method: "api-key" | "cli" | "none";
+  method: "api-key" | "cli" | "none" | "unknown";
   detail: string;
 }
 
@@ -146,11 +146,23 @@ function parseCommandError(error: unknown): AuthStatus {
   }
 
   const detail = extractErrorMessage(error) || "Not authenticated";
+  if (isDefinitiveUnauthenticatedDetail(detail)) {
+    return {
+      authenticated: false,
+      method: "none",
+      detail,
+    };
+  }
+
   return {
     authenticated: false,
-    method: "none",
+    method: "unknown",
     detail,
   };
+}
+
+function isDefinitiveUnauthenticatedDetail(detail: string): boolean {
+  return /not logged in|unauthorized|authentication failed|invalid.*api.?key|no session/i.test(detail);
 }
 
 function extractErrorMessage(error: unknown): string {
