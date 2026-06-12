@@ -52,6 +52,8 @@ export function renderHelpMessage(): DualText {
       title: "ℹ️ Utility",
       commands: [
         ["/start", "Welcome & status"],
+        ["/status", "Codex quota status"],
+        ["/quota", "Codex quota status"],
         ["/help", "This reference"],
         ["/voice", "Voice transcription status"],
       ],

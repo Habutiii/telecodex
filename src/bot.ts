@@ -34,6 +34,7 @@ import {
   formatLaunchProfileBehavior,
   formatLaunchProfileLabel,
 } from "./codex-launch.js";
+import { formatQuotaHTML, formatQuotaPlain, readCodexQuota } from "./codex-quota.js";
 import { getThread } from "./codex-state.js";
 import type { TeleCodexConfig, ToolVerbosity } from "./config.js";
 import { contextKeyFromCtx, isTopicContextKey, parseContextKey, type TelegramContextKey } from "./context-key.js";
@@ -970,6 +971,19 @@ export function createBot(config: TeleCodexConfig, registry: SessionRegistry): B
     await safeReply(ctx, `<b>Voice backends:</b> <code>${escapeHTML(joined)}</code>`, {
       fallbackText: `Voice backends: ${joined}`,
     });
+  });
+
+  bot.command(["quota", "status"], async (ctx) => {
+    try {
+      const quota = await readCodexQuota(config.codexApiKey);
+      await safeReply(ctx, formatQuotaHTML(quota, escapeHTML), {
+        fallbackText: formatQuotaPlain(quota),
+      });
+    } catch (error) {
+      await safeReply(ctx, `<b>Failed to read quota:</b> ${escapeHTML(friendlyErrorText(error))}`, {
+        fallbackText: `Failed to read quota: ${friendlyErrorText(error)}`,
+      });
+    }
   });
 
   bot.command("new", async (ctx) => {
@@ -2156,6 +2170,8 @@ export async function registerCommands(bot: Bot<Context>): Promise<void> {
     { command: "model", description: "View & change model" },
     { command: "effort", description: "Set reasoning effort" },
     { command: "auth", description: "Check auth status" },
+    { command: "status", description: "Codex quota status" },
+    { command: "quota", description: "Codex quota status" },
     { command: "login", description: "Start authentication" },
     { command: "logout", description: "Sign out" },
     { command: "voice", description: "Voice transcription status" },
