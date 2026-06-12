@@ -51,9 +51,7 @@ export async function checkAuthStatus(apiKey?: string): Promise<AuthStatus> {
     cachedAuthStatus = { status, expiresAt: Date.now() + AUTH_CACHE_TTL_MS };
     return status;
   } catch (error) {
-    const status = parseCommandError(error);
-    cachedAuthStatus = { status, expiresAt: Date.now() + AUTH_CACHE_TTL_MS };
-    return status;
+    return parseCommandError(error);
   }
 }
 

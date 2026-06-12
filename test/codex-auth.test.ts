@@ -118,6 +118,30 @@ describe("codex-auth", () => {
       expect(mockExecFile).toHaveBeenCalledTimes(1);
     });
 
+    it("does not cache unauthenticated results", async () => {
+      mockExecFailure("Not logged in");
+
+      const first = await checkAuthStatus();
+      const second = await checkAuthStatus();
+
+      expect(first.authenticated).toBe(false);
+      expect(second.authenticated).toBe(false);
+      expect(mockExecFile).toHaveBeenCalledTimes(2);
+    });
+
+    it("recovers immediately after a transient failure", async () => {
+      mockExecFailure("Command terminated with signal SIGTERM.");
+      const first = await checkAuthStatus();
+
+      mockExecSuccess("Logged in as user@example.com");
+      const second = await checkAuthStatus();
+
+      expect(first.authenticated).toBe(false);
+      expect(second.authenticated).toBe(true);
+      expect(second.detail).toContain("user@example.com");
+      expect(mockExecFile).toHaveBeenCalledTimes(2);
+    });
+
     it("refreshes after clearAuthCache", async () => {
       mockExecSuccess("Logged in");
       await checkAuthStatus();
