@@ -27,6 +27,7 @@ import {
   type CodexSessionCallbacks,
   type CodexSessionInfo,
   type CodexSessionService,
+  listWorkspaceDirectories,
 } from "./codex-session.js";
 import { checkAuthStatus, checkAuthStatusWithRetry, clearAuthCache, startLogin } from "./codex-auth.js";
 import {
@@ -1151,7 +1152,7 @@ export function createBot(config: TeleCodexConfig, registry: SessionRegistry): B
       return;
     }
 
-    const workspaces = session.listWorkspaces();
+    const workspaces = listWorkspaceDirectories(config.workspace);
     if (workspaces.length <= 1) {
       try {
         const info = await session.newThread(workspaces[0] ?? config.workspace);

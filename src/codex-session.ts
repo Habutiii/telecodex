@@ -502,7 +502,7 @@ function resolveLaunchWorkspace(workspace: string, fallbackWorkspace: string): s
   return workspace;
 }
 
-function listWorkspaceDirectories(workspaceRoot: string): string[] {
+export function listWorkspaceDirectories(workspaceRoot: string): string[] {
   const root = path.resolve(workspaceRoot);
   const directories = new Set<string>([root]);
 
