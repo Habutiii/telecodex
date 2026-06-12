@@ -984,6 +984,28 @@ describe("CodexSessionService", () => {
     }
   });
 
+  it("listWorkspaces does not include a missing current workspace from stale metadata", async () => {
+    const workspaceRoot = path.join(tmpdir(), `telecodex-workspaces-${Date.now()}`);
+    mkdirSync(path.join(workspaceRoot, "alpha"), { recursive: true });
+
+    try {
+      const service = await CodexSessionService.create(
+        createConfig({
+          workspaceRoot,
+          workspace: path.join(workspaceRoot, "missing-workspace"),
+        }),
+        { deferThreadStart: true },
+      );
+
+      expect(service.listWorkspaces()).toEqual([
+        workspaceRoot,
+        path.join(workspaceRoot, "alpha"),
+      ]);
+    } finally {
+      rmSync(workspaceRoot, { recursive: true, force: true });
+    }
+  });
+
   it("listModels delegates to codex-state", async () => {
     mockCodexState.listModels.mockReturnValue([
       { slug: "gpt-5.4", displayName: "GPT-5.4" },

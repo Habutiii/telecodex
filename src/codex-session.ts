@@ -505,7 +505,10 @@ function listWorkspaceDirectories(workspaceRoot: string, currentWorkspace: strin
     return [root];
   }
 
-  if (current === root || current.startsWith(`${root}${path.sep}`)) {
+  if (
+    (current === root || current.startsWith(`${root}${path.sep}`)) &&
+    existsDirectory(current)
+  ) {
     directories.add(current);
   }
 
@@ -514,6 +517,14 @@ function listWorkspaceDirectories(workspaceRoot: string, currentWorkspace: strin
     if (right === root) return 1;
     return left.localeCompare(right);
   });
+}
+
+function existsDirectory(targetPath: string): boolean {
+  try {
+    return statSync(targetPath).isDirectory();
+  } catch {
+    return false;
+  }
 }
 
 function buildCodexEnv(apiKey?: string): Record<string, string> {
