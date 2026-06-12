@@ -18,6 +18,7 @@ import { collectArtifactReport, ensureOutDir, formatArtifactSummary } from "./ar
 import {
   formatSessionLabel,
   renderHelpMessage,
+  renderSessionListMessage,
   renderWelcomeFirstTime,
   renderWelcomeReturning,
 } from "./bot-ui.js";
@@ -1370,6 +1371,7 @@ export function createBot(config: TeleCodexConfig, registry: SessionRegistry): B
     const sessionButtons = orderedSessions.map((listedSession, index) => {
       return {
         label: formatSessionLabel({
+          index: index + 1,
           workspace: listedSession.cwd,
           title: listedSession.title || listedSession.firstUserMessage || "",
           relativeTime: formatRelativeTime(listedSession.updatedAt),
@@ -1381,9 +1383,19 @@ export function createBot(config: TeleCodexConfig, registry: SessionRegistry): B
     });
     pendingSessionButtons.set(contextKey, sessionButtons);
     const keyboard = paginateKeyboard(sessionButtons, 0, "sess");
+    const previewItems = orderedSessions.slice(0, KEYBOARD_PAGE_SIZE).map((listedSession, index) => ({
+      index: index + 1,
+      workspace: listedSession.cwd,
+      title: listedSession.title,
+      firstUserMessage: listedSession.firstUserMessage,
+      relativeTime: formatRelativeTime(listedSession.updatedAt),
+      model: listedSession.model || undefined,
+      isActive: listedSession.id === activeThreadId,
+    }));
+    const message = renderSessionListMessage(previewItems, orderedSessions.length);
 
-    await safeReply(ctx, `<b>Recent threads</b> (${orderedSessions.length}):\nTap to switch.`, {
-      fallbackText: `Recent threads (${orderedSessions.length}):\nTap to switch.`,
+    await safeReply(ctx, message.html, {
+      fallbackText: message.plain,
       replyMarkup: keyboard,
     });
   });

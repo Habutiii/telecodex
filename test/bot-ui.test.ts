@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   formatSessionLabel,
   renderHelpMessage,
+  renderSessionListMessage,
   renderWelcomeFirstTime,
   renderWelcomeReturning,
 } from "../src/bot-ui.js";
@@ -108,14 +109,25 @@ describe("bot-ui", () => {
       expect(label).toContain("gpt-4o");
     });
 
-    it("truncates long workspace names to 12 chars", () => {
+    it("truncates long workspace names", () => {
       const label = formatSessionLabel({
         workspace: "/home/user/my-very-long-project-name",
         title: "test",
         relativeTime: "1m",
         isActive: false,
       });
-      expect(label).toContain("my-very-lon…");
+      expect(label).toContain("my-very-l…");
+    });
+
+    it("includes the session number when provided", () => {
+      const label = formatSessionLabel({
+        index: 7,
+        workspace: "/project",
+        title: "test",
+        relativeTime: "1m",
+        isActive: false,
+      });
+      expect(label).toContain("7. test");
     });
 
     it("truncates long titles to 20 chars", () => {
@@ -147,6 +159,49 @@ describe("bot-ui", () => {
         isActive: false,
       });
       expect(label).toContain("very-long…");
+    });
+  });
+
+  describe("renderSessionListMessage", () => {
+    it("renders title, first message, workspace, age, and model", () => {
+      const { html, plain } = renderSessionListMessage(
+        [
+          {
+            index: 1,
+            workspace: "/home/user/telecodex",
+            title: "Improve sessions UX",
+            firstUserMessage: "The /sessions function is hard to understand from Telegram.",
+            relativeTime: "2h ago",
+            model: "gpt-5.4",
+            isActive: true,
+          },
+        ],
+        1,
+      );
+
+      expect(html).toContain("<b>Recent threads</b> (1)");
+      expect(html).toContain("Improve sessions UX");
+      expect(html).toContain("telecodex · 2h ago · gpt-5.4");
+      expect(html).toContain("The /sessions function is hard to understand");
+      expect(plain).toContain("1. ✅ Improve sessions UX");
+    });
+
+    it("mentions when later pages contain more threads", () => {
+      const { plain } = renderSessionListMessage(
+        [
+          {
+            index: 1,
+            workspace: "/project",
+            title: "One",
+            firstUserMessage: "",
+            relativeTime: "just now",
+            isActive: false,
+          },
+        ],
+        3,
+      );
+
+      expect(plain).toContain("2 more on later pages");
     });
   });
 });

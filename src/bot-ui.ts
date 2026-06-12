@@ -5,6 +5,16 @@ export interface DualText {
   plain: string;
 }
 
+export interface SessionListItem {
+  index: number;
+  workspace: string;
+  title: string;
+  firstUserMessage: string;
+  relativeTime: string;
+  model?: string;
+  isActive: boolean;
+}
+
 /**
  * Grouped command reference for /help.
  */
@@ -132,6 +142,7 @@ export function renderWelcomeReturning(
  */
 export function formatSessionLabel(
   options: {
+    index?: number;
     workspace: string;
     title: string;
     relativeTime: string;
@@ -140,11 +151,12 @@ export function formatSessionLabel(
   },
 ): string {
   const prefix = options.isActive ? "✅" : "📁";
-  const workspaceName = trimLabel(getWorkspaceShortName(options.workspace), 12) || "(unknown)";
-  const title = trimLabel(options.title || "(untitled)", 20) || "(untitled)";
+  const number = options.index === undefined ? "" : `${options.index}. `;
+  const workspaceName = trimLabel(getWorkspaceShortName(options.workspace), 10) || "(unknown)";
+  const title = trimLabel(options.title || "(untitled)", 34) || "(untitled)";
   const time = options.relativeTime;
 
-  let label = `${prefix} ${workspaceName} · ${title} · ${time}`;
+  let label = `${prefix} ${number}${title} · ${workspaceName} · ${time}`;
 
   if (options.model) {
     const shortModel = trimLabel(options.model, 10);
@@ -152,6 +164,52 @@ export function formatSessionLabel(
   }
 
   return label;
+}
+
+export function renderSessionListMessage(items: SessionListItem[], totalCount: number): DualText {
+  const htmlLines = [`<b>Recent threads</b> (${totalCount})`, "Tap a numbered button to switch.", ""];
+  const plainLines = [`Recent threads (${totalCount})`, "Tap a numbered button to switch.", ""];
+
+  for (const item of items) {
+    const title = sessionTitle(item);
+    const workspaceName = getWorkspaceShortName(item.workspace) || "(unknown)";
+    const details = [workspaceName, item.relativeTime, item.model].filter(Boolean).join(" · ");
+    const marker = item.isActive ? " ✅" : "";
+    const firstMessage = sessionFirstMessage(item);
+
+    htmlLines.push(`<b>${item.index}.${marker} ${escapeHTML(title)}</b>`);
+    htmlLines.push(escapeHTML(details));
+    plainLines.push(`${item.index}.${marker} ${title}`);
+    plainLines.push(details);
+
+    if (firstMessage && firstMessage !== title) {
+      const preview = trimLabel(firstMessage, 120);
+      htmlLines.push(`<i>${escapeHTML(preview)}</i>`);
+      plainLines.push(preview);
+    }
+
+    htmlLines.push("");
+    plainLines.push("");
+  }
+
+  if (totalCount > items.length) {
+    const remaining = totalCount - items.length;
+    htmlLines.push(`<i>${remaining} more on later pages.</i>`);
+    plainLines.push(`${remaining} more on later pages.`);
+  }
+
+  return {
+    html: htmlLines.join("\n").trimEnd(),
+    plain: plainLines.join("\n").trimEnd(),
+  };
+}
+
+function sessionTitle(item: Pick<SessionListItem, "title" | "firstUserMessage">): string {
+  return trimLabel(item.title || item.firstUserMessage || "(untitled)", 80) || "(untitled)";
+}
+
+function sessionFirstMessage(item: Pick<SessionListItem, "firstUserMessage">): string {
+  return item.firstUserMessage.replace(/\s+/g, " ").trim();
 }
 
 function trimLabel(text: string, maxLength: number): string {
