@@ -23,10 +23,6 @@ export interface GetOrCreateSessionOptions {
   replaceExisting?: boolean;
 }
 
-export interface PruneMissingWorkspacesResult {
-  removedContextKeys: TelegramContextKey[];
-}
-
 export class SessionRegistry {
   private readonly sessions = new Map<TelegramContextKey, CodexSessionService>();
   private readonly metadata = new Map<TelegramContextKey, ContextMetadata>();
@@ -139,31 +135,6 @@ export class SessionRegistry {
 
   listContextsForThread(threadId: string): ContextMetadata[] {
     return this.listContexts().filter((context) => context.threadId === threadId);
-  }
-
-  pruneMissingWorkspaces(): PruneMissingWorkspacesResult {
-    const removedContextKeys: TelegramContextKey[] = [];
-
-    for (const [contextKey, meta] of this.metadata.entries()) {
-      if (existsSync(meta.workspace)) {
-        continue;
-      }
-
-      this.bumpCreationVersion(contextKey);
-      this.pendingSessions.delete(contextKey);
-      const session = this.sessions.get(contextKey);
-      session?.dispose();
-      this.sessions.delete(contextKey);
-      this.metadata.delete(contextKey);
-      this.onRemoveCallback?.(contextKey);
-      removedContextKeys.push(contextKey);
-    }
-
-    if (removedContextKeys.length > 0) {
-      this.persistMetadata();
-    }
-
-    return { removedContextKeys };
   }
 
   updateContextLabel(contextKey: TelegramContextKey, label: string): void {

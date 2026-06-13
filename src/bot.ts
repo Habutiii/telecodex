@@ -45,7 +45,6 @@ import { escapeHTML, formatTelegramHTML } from "./format.js";
 import { retryAsync } from "./retry.js";
 import { SessionRegistry } from "./session-registry.js";
 import { TaskQueue } from "./task-queue.js";
-import { UpdateDeduper } from "./update-dedupe.js";
 import { transcribeAudio } from "./voice.js";
 
 const TELEGRAM_MESSAGE_LIMIT = 4000;
@@ -135,14 +134,6 @@ function paginateKeyboard(items: KeyboardItem[], page: number, prefix: string): 
 export function createBot(config: TeleCodexConfig, registry: SessionRegistry): Bot<Context> {
   const bot = new Bot<Context>(config.telegramBotToken);
   bot.api.config.use(autoRetry({ maxRetryAttempts: 3, maxDelaySeconds: 10 }));
-  const updateDeduper = new UpdateDeduper(config.telegramBotToken);
-
-  bot.use(async (ctx, next) => {
-    if (!updateDeduper.shouldProcess(ctx.update.update_id)) {
-      return;
-    }
-    await next();
-  });
 
   const contextBusy = new Map<
     TelegramContextKey,
@@ -1258,26 +1249,6 @@ export function createBot(config: TeleCodexConfig, registry: SessionRegistry): B
         await clearReaction(ctx);
       }
     });
-  });
-
-  bot.command("clean", async (ctx) => {
-    const result = registry.pruneMissingWorkspaces();
-    const removedCount = result.removedContextKeys.length;
-
-    if (removedCount === 0) {
-      await safeReply(ctx, escapeHTML("Registry is already clean. No missing workspaces found."), {
-        fallbackText: "Registry is already clean. No missing workspaces found.",
-      });
-      return;
-    }
-
-    await safeReply(
-      ctx,
-      `<b>Cleaned registry:</b> removed <code>${removedCount}</code> context${removedCount === 1 ? "" : "s"} with missing workspaces.`,
-      {
-        fallbackText: `Cleaned registry: removed ${removedCount} context${removedCount === 1 ? "" : "s"} with missing workspaces.`,
-      },
-    );
   });
 
   bot.command("session", async (ctx) => {
@@ -2400,7 +2371,6 @@ export async function registerCommands(bot: Bot<Context>): Promise<void> {
     { command: "rename", description: "Rename current thread" },
     { command: "retry", description: "Resend the last prompt" },
     { command: "abort", description: "Cancel current operation" },
-    { command: "clean", description: "Remove stale missing-workspace contexts" },
     { command: "launch_profiles", description: "Select launch profile" },
     { command: "model", description: "View & change model" },
     { command: "effort", description: "Set reasoning effort" },
