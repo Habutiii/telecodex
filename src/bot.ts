@@ -45,6 +45,7 @@ import { escapeHTML, formatTelegramHTML } from "./format.js";
 import { retryAsync } from "./retry.js";
 import { SessionRegistry } from "./session-registry.js";
 import { TaskQueue } from "./task-queue.js";
+import { UpdateDeduper } from "./update-dedupe.js";
 import { transcribeAudio } from "./voice.js";
 
 const TELEGRAM_MESSAGE_LIMIT = 4000;
@@ -134,6 +135,14 @@ function paginateKeyboard(items: KeyboardItem[], page: number, prefix: string): 
 export function createBot(config: TeleCodexConfig, registry: SessionRegistry): Bot<Context> {
   const bot = new Bot<Context>(config.telegramBotToken);
   bot.api.config.use(autoRetry({ maxRetryAttempts: 3, maxDelaySeconds: 10 }));
+  const updateDeduper = new UpdateDeduper(config.telegramBotToken);
+
+  bot.use(async (ctx, next) => {
+    if (!updateDeduper.shouldProcess(ctx.update.update_id)) {
+      return;
+    }
+    await next();
+  });
 
   const contextBusy = new Map<
     TelegramContextKey,
