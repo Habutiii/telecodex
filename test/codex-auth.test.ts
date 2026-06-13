@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { homedir } from "node:os";
 
 const mockExecFile = vi.hoisted(() => vi.fn());
 
@@ -70,6 +71,12 @@ describe("codex-auth", () => {
       expect(status.authenticated).toBe(true);
       expect(status.method).toBe("cli");
       expect(status.detail).toContain("user@example.com");
+      expect(mockExecFile).toHaveBeenCalledWith(
+        "codex",
+        ["login", "status"],
+        expect.objectContaining({ cwd: homedir() }),
+        expect.any(Function),
+      );
     });
 
     it("reports unauthenticated when CLI auth fails", async () => {

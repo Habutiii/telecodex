@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { homedir } from "node:os";
 
 export interface AuthStatus {
   authenticated: boolean;
@@ -144,6 +145,7 @@ function runCodexCommand(args: string[]): Promise<{ stdout: string; stderr: stri
       CODEX_CLI,
       args,
       {
+        cwd: homedir(),
         timeout: COMMAND_TIMEOUT_MS,
         env: { ...process.env },
         maxBuffer: 1024 * 1024,

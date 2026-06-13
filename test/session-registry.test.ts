@@ -149,6 +149,7 @@ describe("SessionRegistry", () => {
       reasoningEffort?: string;
       launchProfileId?: string;
       resumeThreadId?: string;
+      deferThreadStart?: boolean;
     }) =>
       createMockSession({
         threadId: options?.resumeThreadId ?? null,
@@ -275,6 +276,58 @@ describe("SessionRegistry", () => {
       sandboxMode: "workspace-write",
       approvalPolicy: "never",
       unsafeLaunch: false,
+    });
+  });
+
+  it("can ignore persisted metadata when creating a fresh deferred session", async () => {
+    const persistPath = path.join("/workspace/base", ".telecodex", "contexts.json");
+    mockFsState.files.set(
+      persistPath,
+      JSON.stringify([
+        {
+          contextKey: "123",
+          threadId: "thread-a",
+          workspace: "/workspace/old",
+          model: "o4-mini",
+          reasoningEffort: "low",
+          launchProfileId: "readonly",
+          updatedAt: 10,
+        },
+      ]),
+    );
+
+    const registry = new SessionRegistry(createConfig());
+    await registry.getOrCreate("123", { deferThreadStart: true, ignoreMetadata: true });
+
+    expect(mockSessionState.create).toHaveBeenCalledWith(createConfig(), {
+      workspace: undefined,
+      model: undefined,
+      reasoningEffort: undefined,
+      launchProfileId: undefined,
+      deferThreadStart: true,
+      resumeThreadId: undefined,
+    });
+  });
+
+  it("can replace an existing session when starting a fresh new-thread flow", async () => {
+    const registry = new SessionRegistry(createConfig());
+    const first = await registry.getOrCreate("123");
+    const second = await registry.getOrCreate("123", {
+      deferThreadStart: true,
+      ignoreMetadata: true,
+      replaceExisting: true,
+    });
+
+    expect(second).not.toBe(first);
+    expect(first.dispose).toHaveBeenCalledTimes(1);
+    expect(mockSessionState.create).toHaveBeenCalledTimes(2);
+    expect(mockSessionState.create).toHaveBeenLastCalledWith(createConfig(), {
+      workspace: undefined,
+      model: undefined,
+      reasoningEffort: undefined,
+      launchProfileId: undefined,
+      deferThreadStart: true,
+      resumeThreadId: undefined,
     });
   });
 

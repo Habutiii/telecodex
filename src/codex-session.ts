@@ -75,6 +75,7 @@ export type CodexPromptInput = string | { text?: string; imagePaths?: string[]; 
 
 export class CodexSessionService {
   private codex: Codex | null = null;
+  private codexWorkspace: string | null = null;
   private thread: Thread | null = null;
   private currentWorkspace: string;
   private abortController: AbortController | null = null;
@@ -92,7 +93,11 @@ export class CodexSessionService {
 
   static async create(config: TeleCodexConfig, options?: CreateOptions): Promise<CodexSessionService> {
     const service = new CodexSessionService(config);
-    service.currentWorkspace = resolveLaunchWorkspace(options?.workspace ?? config.workspace, config.workspace);
+    service.currentWorkspace = resolveLaunchWorkspace(
+      options?.workspace ?? config.workspace,
+      config.workspace,
+      config.workspaceRoot,
+    );
     service.currentModel = options?.model ?? config.codexModel;
     service.currentReasoningEffort = options?.reasoningEffort as ModelReasoningEffort | undefined;
     service.currentLaunchProfile = getLaunchProfile(
@@ -303,11 +308,16 @@ export class CodexSessionService {
   async newThread(workspace?: string, model?: string): Promise<CodexSessionInfo> {
     this.ensureIdle("start a new thread");
 
-    const effectiveWorkspace = resolveLaunchWorkspace(workspace ?? this.currentWorkspace, this.config.workspace);
+    const effectiveWorkspace = resolveLaunchWorkspace(
+      workspace ?? this.currentWorkspace,
+      this.config.workspace,
+      this.config.workspaceRoot,
+    );
     const effectiveModel = model ?? this.currentModel;
+    this.currentWorkspace = effectiveWorkspace;
+    this.ensureCodexClientWorkspace(effectiveWorkspace);
     this.thread = this.getCodex().startThread(this.buildThreadOptions(effectiveWorkspace, effectiveModel));
     this.activeThreadLaunchProfile = this.currentLaunchProfile;
-    this.currentWorkspace = effectiveWorkspace;
     this.currentThreadId = this.thread.id ?? null;
     if (model) {
       this.currentModel = model;
@@ -318,13 +328,18 @@ export class CodexSessionService {
   async resumeThread(threadId: string): Promise<CodexSessionInfo> {
     this.ensureIdle("resume a thread");
 
-    const workspace = resolveLaunchWorkspace(this.currentWorkspace, this.config.workspace);
+    const workspace = resolveLaunchWorkspace(
+      this.currentWorkspace,
+      this.config.workspace,
+      this.config.workspaceRoot,
+    );
+    this.currentWorkspace = workspace;
+    this.ensureCodexClientWorkspace(workspace);
     this.thread = this.getCodex().resumeThread(
       threadId,
       this.buildThreadOptions(workspace, this.currentModel),
     );
     this.activeThreadLaunchProfile = this.currentLaunchProfile;
-    this.currentWorkspace = workspace;
     this.currentThreadId = threadId;
     return this.getInfo();
   }
@@ -333,12 +348,17 @@ export class CodexSessionService {
     this.ensureIdle("switch session");
 
     const record = getThread(threadId);
-    const workspace = resolveLaunchWorkspace(record?.cwd ?? this.currentWorkspace, this.config.workspace);
+    const workspace = resolveLaunchWorkspace(
+      record?.cwd ?? this.currentWorkspace,
+      this.config.workspace,
+      this.config.workspaceRoot,
+    );
     const model = record?.model || undefined;
 
+    this.currentWorkspace = workspace;
+    this.ensureCodexClientWorkspace(workspace);
     this.thread = this.getCodex().resumeThread(threadId, this.buildThreadOptions(workspace, model));
     this.activeThreadLaunchProfile = this.currentLaunchProfile;
-    this.currentWorkspace = workspace;
     this.currentThreadId = threadId;
     if (model) {
       this.currentModel = model;
@@ -347,7 +367,10 @@ export class CodexSessionService {
   }
 
   listAllSessions(limit?: number): CodexThreadRecord[] {
-    return listThreads(limit ?? 20);
+    const requestedLimit = limit ?? 20;
+    return listThreads(Math.max(requestedLimit, 200))
+      .filter((thread) => isWithinWorkspaceRoot(thread.cwd, this.config.workspaceRoot))
+      .slice(0, requestedLimit);
   }
 
   listWorkspaces(): string[] {
@@ -473,14 +496,26 @@ export class CodexSessionService {
     return this.codex!;
   }
 
+  private ensureCodexClientWorkspace(workspace: string): void {
+    if (!this.codex || this.codexWorkspace !== workspace) {
+      this.resetCodexClient();
+    }
+  }
+
   private resetCodexClient(): void {
     this.codex = new Codex({
       apiKey: this.config.codexApiKey,
       config: {
         approval_policy: this.currentLaunchProfile.approvalPolicy,
+        projects: {
+          [toTomlQuotedKey(this.currentWorkspace)]: {
+            trust_level: "untrusted",
+          },
+        },
       },
       env: buildCodexEnv(this.config.codexApiKey),
     });
+    this.codexWorkspace = this.currentWorkspace;
   }
 }
 
@@ -492,14 +527,24 @@ function getLaunchProfile(config: TeleCodexConfig, profileId: string): CodexLaun
   return profile;
 }
 
-function resolveLaunchWorkspace(workspace: string, fallbackWorkspace: string): string {
-  if (existsDirectory(workspace)) {
-    return workspace;
-  }
-  if (existsDirectory(fallbackWorkspace)) {
+function resolveLaunchWorkspace(workspace: string, fallbackWorkspace: string, workspaceRoot: string): string {
+  if (!isWithinWorkspaceRoot(workspace, workspaceRoot)) {
     return fallbackWorkspace;
   }
+  if (existsDirectory(workspace)) {
+    return path.resolve(workspace);
+  }
+  if (existsDirectory(fallbackWorkspace)) {
+    return path.resolve(fallbackWorkspace);
+  }
   return workspace;
+}
+
+function isWithinWorkspaceRoot(workspace: string, workspaceRoot: string): boolean {
+  const resolvedWorkspace = path.resolve(workspace);
+  const resolvedRoot = path.resolve(workspaceRoot);
+  const relative = path.relative(resolvedRoot, resolvedWorkspace);
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
 export function listWorkspaceDirectories(workspaceRoot: string): string[] {
@@ -550,6 +595,10 @@ function buildCodexEnv(apiKey?: string): Record<string, string> {
   }
 
   return env;
+}
+
+function toTomlQuotedKey(value: string): string {
+  return JSON.stringify(value);
 }
 
 function computeTextDelta(previousText: string, nextText: string): string {

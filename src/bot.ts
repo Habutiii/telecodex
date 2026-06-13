@@ -191,7 +191,7 @@ export function createBot(config: TeleCodexConfig, registry: SessionRegistry): B
 
   const getContextSession = async (
     ctx: Context,
-    options?: { deferThreadStart?: boolean },
+    options?: { deferThreadStart?: boolean; ignoreMetadata?: boolean; replaceExisting?: boolean },
   ): Promise<{ contextKey: TelegramContextKey; session: CodexSessionService } | null> => {
     const contextKey = contextKeyFromCtx(ctx);
     if (!contextKey) {
@@ -1139,12 +1139,12 @@ export function createBot(config: TeleCodexConfig, registry: SessionRegistry): B
       return;
     }
 
-    const contextSession = await getContextSession(ctx, { deferThreadStart: true });
-    if (!contextSession) {
+    const contextKey = contextKeyFromCtx(ctx);
+    if (!contextKey) {
       return;
     }
 
-    const { contextKey, session } = contextSession;
+    contextLabels.set(contextKey, getTelegramContextLabel(ctx, contextKey));
     if (isBusy(contextKey)) {
       await safeReply(ctx, escapeHTML("Cannot create a new thread while a prompt is running."), {
         fallbackText: "Cannot create a new thread while a prompt is running.",
@@ -1152,6 +1152,11 @@ export function createBot(config: TeleCodexConfig, registry: SessionRegistry): B
       return;
     }
 
+    const session = await registry.getOrCreate(contextKey, {
+      deferThreadStart: true,
+      ignoreMetadata: true,
+      replaceExisting: true,
+    });
     const workspaces = listWorkspaceDirectories(config.workspace);
     if (workspaces.length <= 1) {
       try {
@@ -1788,7 +1793,10 @@ export function createBot(config: TeleCodexConfig, registry: SessionRegistry): B
       return;
     }
 
-    const contextSession = await getContextSession(ctx, { deferThreadStart: true });
+    const contextSession = await getContextSession(ctx, {
+      deferThreadStart: true,
+      ignoreMetadata: true,
+    });
     if (!contextSession) {
       return;
     }

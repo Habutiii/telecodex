@@ -17,6 +17,12 @@ export interface ContextMetadata {
   updatedAt: number;
 }
 
+export interface GetOrCreateSessionOptions {
+  deferThreadStart?: boolean;
+  ignoreMetadata?: boolean;
+  replaceExisting?: boolean;
+}
+
 export class SessionRegistry {
   private readonly sessions = new Map<TelegramContextKey, CodexSessionService>();
   private readonly metadata = new Map<TelegramContextKey, ContextMetadata>();
@@ -30,14 +36,20 @@ export class SessionRegistry {
 
   async getOrCreate(
     contextKey: TelegramContextKey,
-    options?: { deferThreadStart?: boolean },
+    options?: GetOrCreateSessionOptions,
   ): Promise<CodexSessionService> {
     let session = this.sessions.get(contextKey);
+    if (session && options?.replaceExisting) {
+      session.dispose();
+      this.sessions.delete(contextKey);
+      session = undefined;
+    }
+
     if (session) {
       return session;
     }
 
-    const meta = this.metadata.get(contextKey);
+    const meta = options?.ignoreMetadata ? undefined : this.metadata.get(contextKey);
     const launchProfileId = resolveLaunchProfileId(this.config, meta);
     session = await CodexSessionService.create(this.config, {
       workspace: meta?.workspace,

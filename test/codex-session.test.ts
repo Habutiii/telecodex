@@ -156,7 +156,14 @@ describe("CodexSessionService", () => {
     expect(mockState.Codex).toHaveBeenCalledWith(
       expect.objectContaining({
         apiKey: "codex-key",
-        config: { approval_policy: "never" },
+        config: {
+          approval_policy: "never",
+          projects: {
+            "\"/workspace/base\"": {
+              trust_level: "untrusted",
+            },
+          },
+        },
         env: expect.objectContaining({ CODEX_API_KEY: "codex-key" }),
       }),
     );
@@ -185,7 +192,7 @@ describe("CodexSessionService", () => {
 
   it("create accepts overrides for workspace, model, reasoning effort, launch profile, and resumeThreadId", async () => {
     const service = await CodexSessionService.create(createConfig(), {
-      workspace: "/workspace/resumed",
+      workspace: "/workspace/base/resumed",
       model: "gpt-5.4",
       reasoningEffort: "high",
       launchProfileId: "readonly",
@@ -197,14 +204,14 @@ describe("CodexSessionService", () => {
     expect(codexInstance.resumeThread).toHaveBeenCalledWith("thread-resume", {
       model: "gpt-5.4",
       sandboxMode: "read-only",
-      workingDirectory: "/workspace/resumed",
+      workingDirectory: "/workspace/base/resumed",
       approvalPolicy: "never",
       skipGitRepoCheck: true,
       modelReasoningEffort: "high",
     });
     expect(service.getInfo()).toEqual({
       threadId: "thread-resume",
-      workspace: "/workspace/resumed",
+      workspace: "/workspace/base/resumed",
       model: "gpt-5.4",
       reasoningEffort: "high",
       launchProfileId: "readonly",
@@ -213,6 +220,15 @@ describe("CodexSessionService", () => {
       sandboxMode: "read-only",
       approvalPolicy: "never",
       unsafeLaunch: false,
+    });
+
+    expect(mockState.createdCodexOptions[0]?.config).toEqual({
+      approval_policy: "never",
+      projects: {
+        "\"/workspace/base/resumed\"": {
+          trust_level: "untrusted",
+        },
+      },
     });
   });
 
@@ -228,6 +244,31 @@ describe("CodexSessionService", () => {
     await service.newThread();
 
     expect(mockState.createdThreads[0].options.sandboxMode).toBe("read-only");
+  });
+
+  it("updates the workspace trust override when starting a thread in a different workspace", async () => {
+    const service = await CodexSessionService.create(createConfig(), {
+      deferThreadStart: true,
+    });
+
+    await service.newThread("/workspace/base/other");
+
+    expect(mockState.createdCodexOptions[0]?.config).toEqual({
+      approval_policy: "never",
+      projects: {
+        "\"/workspace/base\"": {
+          trust_level: "untrusted",
+        },
+      },
+    });
+    expect(mockState.createdCodexOptions[1]?.config).toEqual({
+      approval_policy: "never",
+      projects: {
+        "\"/workspace/base/other\"": {
+          trust_level: "untrusted",
+        },
+      },
+    });
   });
 
   it("setLaunchProfile applies to newly created threads without mutating the existing thread", async () => {
@@ -680,21 +721,21 @@ describe("CodexSessionService", () => {
 
   it("creates a new thread in a different workspace", async () => {
     const service = await CodexSessionService.create(createConfig());
-    const codexInstance = mockState.codexInstances[0];
 
-    const info = await service.newThread("/workspace/other");
+    const info = await service.newThread("/workspace/base/other");
+    const codexInstance = mockState.codexInstances.at(-1);
 
-    expect(codexInstance.startThread).toHaveBeenCalledTimes(2);
-    expect(codexInstance.startThread).toHaveBeenLastCalledWith({
+    expect(mockState.codexInstances).toHaveLength(2);
+    expect(codexInstance?.startThread).toHaveBeenCalledWith({
       model: "o3",
       sandboxMode: "workspace-write",
-      workingDirectory: "/workspace/other",
+      workingDirectory: "/workspace/base/other",
       approvalPolicy: "never",
       skipGitRepoCheck: true,
     });
     expect(info).toEqual({
       threadId: null,
-      workspace: "/workspace/other",
+      workspace: "/workspace/base/other",
       model: "o3",
       launchProfileId: "default",
       launchProfileLabel: "Default",
@@ -703,7 +744,7 @@ describe("CodexSessionService", () => {
       approvalPolicy: "never",
       unsafeLaunch: false,
     });
-    expect(service.getCurrentWorkspace()).toBe("/workspace/other");
+    expect(service.getCurrentWorkspace()).toBe("/workspace/base/other");
   });
 
   it("falls back to the configured workspace when a persisted workspace was deleted", async () => {
@@ -764,7 +805,7 @@ describe("CodexSessionService", () => {
     mockCodexState.getThread.mockReturnValue({
       id: "thread-abc",
       title: "Saved thread",
-      cwd: "/workspace/from-db",
+      cwd: "/workspace/base/from-db",
       model: "gpt-5.4-mini",
       createdAt: new Date("2025-01-01T00:00:00.000Z"),
       updatedAt: new Date("2025-01-02T00:00:00.000Z"),
@@ -772,21 +813,21 @@ describe("CodexSessionService", () => {
     });
 
     const service = await CodexSessionService.create(createConfig());
-    const codexInstance = mockState.codexInstances[0];
 
     const info = await service.switchSession("thread-abc");
+    const codexInstance = mockState.codexInstances.at(-1);
 
     expect(mockCodexState.getThread).toHaveBeenCalledWith("thread-abc");
-    expect(codexInstance.resumeThread).toHaveBeenLastCalledWith("thread-abc", {
+    expect(codexInstance?.resumeThread).toHaveBeenCalledWith("thread-abc", {
       model: "gpt-5.4-mini",
       sandboxMode: "workspace-write",
-      workingDirectory: "/workspace/from-db",
+      workingDirectory: "/workspace/base/from-db",
       approvalPolicy: "never",
       skipGitRepoCheck: true,
     });
     expect(info).toEqual({
       threadId: "thread-abc",
-      workspace: "/workspace/from-db",
+      workspace: "/workspace/base/from-db",
       model: "gpt-5.4-mini",
       launchProfileId: "default",
       launchProfileLabel: "Default",
@@ -1004,25 +1045,46 @@ describe("CodexSessionService", () => {
     });
   });
 
-  it("listAllSessions delegates to codex-state", async () => {
+  it("listAllSessions filters codex-state threads to the configured workspace root", async () => {
     mockCodexState.listThreads.mockReturnValue([
       {
         id: "thread-1",
         title: "One",
-        cwd: "/workspace/a",
+        cwd: "/workspace/base/a",
         model: "o3",
         createdAt: new Date("2025-01-01T00:00:00.000Z"),
         updatedAt: new Date("2025-01-02T00:00:00.000Z"),
         firstUserMessage: "hello",
+      },
+      {
+        id: "thread-old",
+        title: "Old",
+        cwd: "/old/workspace",
+        model: "o3",
+        createdAt: new Date("2025-01-01T00:00:00.000Z"),
+        updatedAt: new Date("2025-01-02T00:00:00.000Z"),
+        firstUserMessage: "old",
       },
     ]);
 
     const service = await CodexSessionService.create(createConfig());
 
     expect(service.listAllSessions(5)).toEqual([
-      expect.objectContaining({ id: "thread-1", cwd: "/workspace/a" }),
+      expect.objectContaining({ id: "thread-1", cwd: "/workspace/base/a" }),
     ]);
-    expect(mockCodexState.listThreads).toHaveBeenCalledWith(5);
+    expect(mockCodexState.listThreads).toHaveBeenCalledWith(200);
+  });
+
+  it("falls back to the configured workspace when persisted metadata points outside the workspace root", async () => {
+    const service = await CodexSessionService.create(createConfig(), {
+      workspace: "/old/workspace",
+      deferThreadStart: true,
+    });
+
+    const info = await service.newThread();
+
+    expect(info.workspace).toBe("/workspace/base");
+    expect(mockState.createdThreads[0].options.workingDirectory).toBe("/workspace/base");
   });
 
   it("listWorkspaces lists the configured root and direct child directories", async () => {
