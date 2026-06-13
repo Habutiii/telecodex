@@ -1157,7 +1157,7 @@ export function createBot(config: TeleCodexConfig, registry: SessionRegistry): B
       ignoreMetadata: true,
       replaceExisting: true,
     });
-    const workspaces = listWorkspaceDirectories(config.workspace);
+    const workspaces = listWorkspaceDirectories(config.workspaceRoot);
     if (workspaces.length <= 1) {
       try {
         const info = await session.newThread(workspaces[0] ?? config.workspace);
