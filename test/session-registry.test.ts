@@ -331,6 +331,99 @@ describe("SessionRegistry", () => {
     });
   });
 
+  it("deduplicates concurrent creates for the same context", async () => {
+    let resolveCreate: ((session: ReturnType<typeof createMockSession>) => void) | undefined;
+    mockSessionState.create.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveCreate = resolve;
+        }),
+    );
+
+    const registry = new SessionRegistry(createConfig());
+    const firstPromise = registry.getOrCreate("123");
+    const secondPromise = registry.getOrCreate("123");
+
+    expect(mockSessionState.create).toHaveBeenCalledTimes(1);
+
+    const created = createMockSession({
+      threadId: null,
+      workspace: "/workspace/base",
+      model: "o3",
+      launchProfileId: "default",
+      launchProfileLabel: "Default",
+      launchProfileBehavior: "workspace-write / never",
+      sandboxMode: "workspace-write",
+      approvalPolicy: "never",
+      unsafeLaunch: false,
+    });
+    resolveCreate?.(created);
+
+    const [first, second] = await Promise.all([firstPromise, secondPromise]);
+    expect(first).toBe(second);
+  });
+
+  it("keeps only the latest session when replaceExisting races with an in-flight create", async () => {
+    let resolveFirstCreate: ((session: ReturnType<typeof createMockSession>) => void) | undefined;
+    mockSessionState.create
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveFirstCreate = resolve;
+          }),
+      )
+      .mockImplementationOnce(async (config: TeleCodexConfig, options?: {
+        workspace?: string;
+        model?: string;
+        reasoningEffort?: string;
+        launchProfileId?: string;
+        resumeThreadId?: string;
+        deferThreadStart?: boolean;
+      }) =>
+        createMockSession({
+          threadId: options?.resumeThreadId ?? null,
+          workspace: options?.workspace ?? config.workspace,
+          model: options?.model ?? config.codexModel,
+          reasoningEffort: options?.reasoningEffort,
+          launchProfileId: options?.launchProfileId ?? config.defaultLaunchProfileId,
+          launchProfileLabel: "Default",
+          launchProfileBehavior: "workspace-write / never",
+          sandboxMode: "workspace-write",
+          approvalPolicy: "never",
+          unsafeLaunch: false,
+        }),
+      );
+
+    const registry = new SessionRegistry(createConfig());
+    const firstPromise = registry.getOrCreate("123");
+    const secondPromise = registry.getOrCreate("123", {
+      deferThreadStart: true,
+      ignoreMetadata: true,
+      replaceExisting: true,
+    });
+
+    expect(mockSessionState.create).toHaveBeenCalledTimes(2);
+
+    const stale = createMockSession({
+      threadId: null,
+      workspace: "/workspace/base/stale",
+      model: "o3",
+      launchProfileId: "default",
+      launchProfileLabel: "Default",
+      launchProfileBehavior: "workspace-write / never",
+      sandboxMode: "workspace-write",
+      approvalPolicy: "never",
+      unsafeLaunch: false,
+    });
+    resolveFirstCreate?.(stale);
+
+    const [first, second] = await Promise.all([firstPromise, secondPromise]);
+
+    expect(stale.dispose).toHaveBeenCalledTimes(1);
+    expect(first).toBe(second);
+    expect(registry.get("123")).toBe(second);
+  });
+
   it("falls back to the default launch profile when persisted metadata references a missing profile", async () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const persistPath = path.join("/workspace/base", ".telecodex", "contexts.json");
@@ -552,5 +645,56 @@ describe("SessionRegistry", () => {
 
     expect(removed).toEqual(["100"]);
     expect(registry.has("100")).toBe(false);
+  });
+
+  it("prunes contexts whose workspaces no longer exist", async () => {
+    mockFsState.directories.add("/workspace/base");
+    mockFsState.directories.add("/workspace/exists");
+
+    const registry = new SessionRegistry(createConfig());
+    const existing = (await registry.getOrCreate("100")) as any;
+    const missing = (await registry.getOrCreate("200")) as any;
+
+    existing.setInfo({
+      threadId: "thread-a",
+      workspace: "/workspace/exists",
+      launchProfileId: "default",
+      launchProfileLabel: "Default",
+      launchProfileBehavior: "workspace-write / never",
+      sandboxMode: "workspace-write",
+      approvalPolicy: "never",
+      unsafeLaunch: false,
+    });
+    missing.setInfo({
+      threadId: "thread-b",
+      workspace: "/workspace/missing",
+      launchProfileId: "default",
+      launchProfileLabel: "Default",
+      launchProfileBehavior: "workspace-write / never",
+      sandboxMode: "workspace-write",
+      approvalPolicy: "never",
+      unsafeLaunch: false,
+    });
+
+    registry.updateMetadata("100", existing);
+    registry.updateMetadata("200", missing);
+
+    const removed: string[] = [];
+    registry.onRemove((key) => removed.push(key));
+
+    const result = registry.pruneMissingWorkspaces();
+
+    expect(result).toEqual({ removedContextKeys: ["200"] });
+    expect(removed).toEqual(["200"]);
+    expect(missing.dispose).toHaveBeenCalledTimes(1);
+    expect(existing.dispose).not.toHaveBeenCalled();
+    expect(registry.has("100")).toBe(true);
+    expect(registry.has("200")).toBe(false);
+    expect(registry.listContexts()).toEqual([
+      expect.objectContaining({
+        contextKey: "100",
+        workspace: "/workspace/exists",
+      }),
+    ]);
   });
 });

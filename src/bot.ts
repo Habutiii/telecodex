@@ -1251,6 +1251,26 @@ export function createBot(config: TeleCodexConfig, registry: SessionRegistry): B
     });
   });
 
+  bot.command("clean", async (ctx) => {
+    const result = registry.pruneMissingWorkspaces();
+    const removedCount = result.removedContextKeys.length;
+
+    if (removedCount === 0) {
+      await safeReply(ctx, escapeHTML("Registry is already clean. No missing workspaces found."), {
+        fallbackText: "Registry is already clean. No missing workspaces found.",
+      });
+      return;
+    }
+
+    await safeReply(
+      ctx,
+      `<b>Cleaned registry:</b> removed <code>${removedCount}</code> context${removedCount === 1 ? "" : "s"} with missing workspaces.`,
+      {
+        fallbackText: `Cleaned registry: removed ${removedCount} context${removedCount === 1 ? "" : "s"} with missing workspaces.`,
+      },
+    );
+  });
+
   bot.command("session", async (ctx) => {
     const contextSession = await getContextSession(ctx, { deferThreadStart: true });
     if (!contextSession) {
@@ -2371,6 +2391,7 @@ export async function registerCommands(bot: Bot<Context>): Promise<void> {
     { command: "rename", description: "Rename current thread" },
     { command: "retry", description: "Resend the last prompt" },
     { command: "abort", description: "Cancel current operation" },
+    { command: "clean", description: "Remove stale missing-workspace contexts" },
     { command: "launch_profiles", description: "Select launch profile" },
     { command: "model", description: "View & change model" },
     { command: "effort", description: "Set reasoning effort" },

@@ -23,9 +23,15 @@ export interface GetOrCreateSessionOptions {
   replaceExisting?: boolean;
 }
 
+export interface PruneMissingWorkspacesResult {
+  removedContextKeys: TelegramContextKey[];
+}
+
 export class SessionRegistry {
   private readonly sessions = new Map<TelegramContextKey, CodexSessionService>();
   private readonly metadata = new Map<TelegramContextKey, ContextMetadata>();
+  private readonly pendingSessions = new Map<TelegramContextKey, Promise<CodexSessionService>>();
+  private readonly creationVersions = new Map<TelegramContextKey, number>();
   private readonly persistPath: string;
   private onRemoveCallback?: (contextKey: TelegramContextKey) => void;
 
@@ -39,29 +45,65 @@ export class SessionRegistry {
     options?: GetOrCreateSessionOptions,
   ): Promise<CodexSessionService> {
     let session = this.sessions.get(contextKey);
+    const pending = this.pendingSessions.get(contextKey);
+
     if (session && options?.replaceExisting) {
       session.dispose();
       this.sessions.delete(contextKey);
       session = undefined;
+      this.bumpCreationVersion(contextKey);
+    } else if (pending && options?.replaceExisting) {
+      this.bumpCreationVersion(contextKey);
     }
 
     if (session) {
       return session;
     }
 
+    if (pending && !options?.replaceExisting) {
+      return pending;
+    }
+
     const meta = options?.ignoreMetadata ? undefined : this.metadata.get(contextKey);
     const launchProfileId = resolveLaunchProfileId(this.config, meta);
-    session = await CodexSessionService.create(this.config, {
-      workspace: meta?.workspace,
-      model: meta?.model,
-      reasoningEffort: meta?.reasoningEffort,
-      launchProfileId,
-      deferThreadStart: options?.deferThreadStart && !meta?.threadId,
-      resumeThreadId: meta?.threadId ?? undefined,
-    });
+    const requestVersion = this.creationVersions.get(contextKey) ?? 0;
 
-    this.sessions.set(contextKey, session);
-    return session;
+    let createPromise!: Promise<CodexSessionService>;
+    createPromise = (async (): Promise<CodexSessionService> => {
+      const created = await CodexSessionService.create(this.config, {
+        workspace: meta?.workspace,
+        model: meta?.model,
+        reasoningEffort: meta?.reasoningEffort,
+        launchProfileId,
+        deferThreadStart: options?.deferThreadStart && !meta?.threadId,
+        resumeThreadId: meta?.threadId ?? undefined,
+      });
+
+      if ((this.creationVersions.get(contextKey) ?? 0) !== requestVersion) {
+        created.dispose();
+        const replacement = this.pendingSessions.get(contextKey);
+        if (replacement && replacement !== createPromise) {
+          return replacement;
+        }
+        const current = this.sessions.get(contextKey);
+        if (current) {
+          return current;
+        }
+      }
+
+      this.sessions.set(contextKey, created);
+      return created;
+    })();
+
+    this.pendingSessions.set(contextKey, createPromise);
+
+    try {
+      return await createPromise;
+    } finally {
+      if (this.pendingSessions.get(contextKey) === createPromise) {
+        this.pendingSessions.delete(contextKey);
+      }
+    }
   }
 
   get(contextKey: TelegramContextKey): CodexSessionService | undefined {
@@ -99,6 +141,31 @@ export class SessionRegistry {
     return this.listContexts().filter((context) => context.threadId === threadId);
   }
 
+  pruneMissingWorkspaces(): PruneMissingWorkspacesResult {
+    const removedContextKeys: TelegramContextKey[] = [];
+
+    for (const [contextKey, meta] of this.metadata.entries()) {
+      if (existsSync(meta.workspace)) {
+        continue;
+      }
+
+      this.bumpCreationVersion(contextKey);
+      this.pendingSessions.delete(contextKey);
+      const session = this.sessions.get(contextKey);
+      session?.dispose();
+      this.sessions.delete(contextKey);
+      this.metadata.delete(contextKey);
+      this.onRemoveCallback?.(contextKey);
+      removedContextKeys.push(contextKey);
+    }
+
+    if (removedContextKeys.length > 0) {
+      this.persistMetadata();
+    }
+
+    return { removedContextKeys };
+  }
+
   updateContextLabel(contextKey: TelegramContextKey, label: string): void {
     const existing = this.metadata.get(contextKey);
     if (!existing) {
@@ -118,6 +185,8 @@ export class SessionRegistry {
   }
 
   remove(contextKey: TelegramContextKey): void {
+    this.bumpCreationVersion(contextKey);
+    this.pendingSessions.delete(contextKey);
     const session = this.sessions.get(contextKey);
     session?.dispose();
     this.sessions.delete(contextKey);
@@ -127,6 +196,10 @@ export class SessionRegistry {
   }
 
   disposeAll(): void {
+    for (const contextKey of this.pendingSessions.keys()) {
+      this.bumpCreationVersion(contextKey);
+    }
+    this.pendingSessions.clear();
     for (const session of this.sessions.values()) {
       session.dispose();
     }
@@ -164,6 +237,10 @@ export class SessionRegistry {
     } catch {
       // Silently ignore load errors.
     }
+  }
+
+  private bumpCreationVersion(contextKey: TelegramContextKey): void {
+    this.creationVersions.set(contextKey, (this.creationVersions.get(contextKey) ?? 0) + 1);
   }
 }
 

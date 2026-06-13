@@ -32,6 +32,7 @@ export function renderHelpMessage(): DualText {
         ["/handback", "Hand thread back to Codex CLI"],
         ["/abort", "Cancel current operation"],
         ["/retry", "Resend the last prompt"],
+        ["/clean", "Remove stale contexts with missing workspaces"],
       ],
     },
     {
