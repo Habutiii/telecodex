@@ -25,24 +25,25 @@ export function renderHelpMessage(): DualText {
       title: "💬 Session",
       commands: [
         ["/new", "Start a new thread"],
-        ["/session", "Current thread details"],
         ["/sessions", "Browse & switch threads"],
-        ["/rename", "Rename current thread"],
         ["/abort", "Cancel current operation"],
         ["/retry", "Resend the last prompt"],
+        ["/session", "Current thread details"],
+        ["/rename", "Rename current thread"],
       ],
     },
     {
       title: "🤖 Model & Agent",
       commands: [
-        ["/switch_agent", "Switch between Codex / Claude Code"],
         ["/model", "View & change model"],
         ["/effort", "Set reasoning effort"],
+        ["/switch_agent", "Switch between Codex / Claude Code"],
       ],
     },
     {
-      title: "🔐 Auth",
+      title: "🔐 Auth & Usage",
       commands: [
+        ["/quota", "Usage & quota for active agent"],
         ["/auth", "Check auth status"],
         ["/login", "Start authentication"],
       ],
@@ -51,7 +52,6 @@ export function renderHelpMessage(): DualText {
       title: "ℹ️ Utility",
       commands: [
         ["/start", "Welcome & status"],
-        ["/quota", "Usage & quota for active agent"],
         ["/help", "This reference"],
       ],
     },

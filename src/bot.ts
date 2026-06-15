@@ -2061,20 +2061,20 @@ export function createBot(config: TeleCodexConfig, registry: SessionRegistry): B
 
 export async function registerCommands(bot: Bot<Context>): Promise<void> {
   await bot.api.setMyCommands([
-    { command: "start", description: "Welcome & status" },
-    { command: "help", description: "Command reference" },
     { command: "new", description: "Start a new thread" },
-    { command: "session", description: "Current thread details" },
     { command: "sessions", description: "Browse & switch threads" },
-    { command: "rename", description: "Rename current thread" },
-    { command: "retry", description: "Resend the last prompt" },
     { command: "abort", description: "Cancel current operation" },
+    { command: "retry", description: "Resend the last prompt" },
+    { command: "session", description: "Current thread details" },
+    { command: "rename", description: "Rename current thread" },
     { command: "model", description: "View & change model" },
     { command: "effort", description: "Set reasoning effort" },
-    { command: "auth", description: "Check auth status" },
-    { command: "quota", description: "Usage & quota for active agent" },
-    { command: "login", description: "Start authentication" },
     { command: "switch_agent", description: "Switch between Codex / Claude Code" },
+    { command: "quota", description: "Usage & quota for active agent" },
+    { command: "auth", description: "Check auth status" },
+    { command: "login", description: "Start authentication" },
+    { command: "start", description: "Welcome & status" },
+    { command: "help", description: "Command reference" },
   ]);
 }
 
