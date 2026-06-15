@@ -1,8 +1,9 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
+import { type AgentType, getActiveAgent } from "./agent-state.js";
 import { findLaunchProfile } from "./codex-launch.js";
-import { CodexSessionService } from "./codex-session.js";
+import { createSessionService, type CodexSessionService } from "./codex-session.js";
 import type { TeleCodexConfig } from "./config.js";
 import type { TelegramContextKey } from "./context-key.js";
 
@@ -28,12 +29,41 @@ export class SessionRegistry {
   private readonly metadata = new Map<TelegramContextKey, ContextMetadata>();
   private readonly pendingSessions = new Map<TelegramContextKey, Promise<CodexSessionService>>();
   private readonly creationVersions = new Map<TelegramContextKey, number>();
-  private readonly persistPath: string;
+  private readonly telecodexDir: string;
   private onRemoveCallback?: (contextKey: TelegramContextKey) => void;
 
   constructor(private readonly config: TeleCodexConfig) {
-    this.persistPath = path.join(config.workspace, ".telecodex", "contexts.json");
-    this.loadPersistedMetadata();
+    this.telecodexDir = path.join(config.workspace, ".telecodex");
+    this.loadPersistedMetadata(getActiveAgent());
+  }
+
+  // Per-agent persist file.  Falls back to the legacy contexts.json (treated as Codex data).
+  private persistPathFor(agent: AgentType): string {
+    return path.join(this.telecodexDir, `contexts-${agent}.json`);
+  }
+
+  // Dispose live session services and reload the new agent's saved metadata.
+  // Thread IDs and workspace info are preserved per agent so sessions resume on switch-back.
+  switchAgent(newAgent: AgentType): void {
+    // Cancel any in-flight creates for the current agent.
+    for (const key of this.pendingSessions.keys()) {
+      this.bumpCreationVersion(key);
+    }
+    this.pendingSessions.clear();
+
+    // Dispose live session services (subprocess / SDK connections).
+    for (const session of this.sessions.values()) {
+      session.dispose();
+    }
+    // Notify the bot maps so they can clean up their per-key state.
+    for (const key of this.sessions.keys()) {
+      this.onRemoveCallback?.(key);
+    }
+    this.sessions.clear();
+
+    // Swap metadata to the new agent's saved state.
+    this.metadata.clear();
+    this.loadPersistedMetadata(newAgent);
   }
 
   async getOrCreate(
@@ -66,7 +96,7 @@ export class SessionRegistry {
 
     let createPromise!: Promise<CodexSessionService>;
     createPromise = (async (): Promise<CodexSessionService> => {
-      const created = await CodexSessionService.create(this.config, {
+      const created = await createSessionService(getActiveAgent(), this.config, {
         workspace: meta?.workspace,
         model: meta?.model,
         reasoningEffort: meta?.reasoningEffort,
@@ -178,13 +208,13 @@ export class SessionRegistry {
   }
 
   private persistMetadata(): void {
+    const targetPath = this.persistPathFor(getActiveAgent());
     try {
-      const dir = path.dirname(this.persistPath);
-      if (!existsSync(dir)) {
-        mkdirSync(dir, { recursive: true });
+      if (!existsSync(this.telecodexDir)) {
+        mkdirSync(this.telecodexDir, { recursive: true });
       }
       const data = [...this.metadata.values()];
-      writeFileSync(this.persistPath, JSON.stringify(data, null, 2), "utf8");
+      writeFileSync(targetPath, JSON.stringify(data, null, 2), "utf8");
     } catch (error) {
       console.warn(
         "Failed to persist context metadata:",
@@ -193,12 +223,22 @@ export class SessionRegistry {
     }
   }
 
-  private loadPersistedMetadata(): void {
+  private loadPersistedMetadata(agent: AgentType): void {
+    // Primary path for this agent; fall back to the legacy contexts.json for Codex only.
+    const primaryPath = this.persistPathFor(agent);
+    const legacyPath = path.join(this.telecodexDir, "contexts.json");
+    const isLegacyFallback =
+      !existsSync(primaryPath) && agent === "codex" && existsSync(legacyPath);
+    const targetPath = existsSync(primaryPath)
+      ? primaryPath
+      : isLegacyFallback
+        ? legacyPath
+        : null;
+
+    if (!targetPath) return;
+
     try {
-      if (!existsSync(this.persistPath)) {
-        return;
-      }
-      const raw = readFileSync(this.persistPath, "utf8");
+      const raw = readFileSync(targetPath, "utf8");
       const data = JSON.parse(raw) as ContextMetadata[];
       for (const entry of data) {
         if (entry.contextKey) {
@@ -207,6 +247,11 @@ export class SessionRegistry {
       }
     } catch {
       // Silently ignore load errors.
+    }
+
+    // Migrate from the legacy path by writing to the per-agent path immediately.
+    if (isLegacyFallback && this.metadata.size > 0) {
+      this.persistMetadata();
     }
   }
 

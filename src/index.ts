@@ -1,5 +1,6 @@
+import { agentDisplayName, getActiveAgent, initAgentState } from "./agent-state.js";
 import { createBot, registerCommands } from "./bot.js";
-import { checkAuthStatus } from "./codex-auth.js";
+import { checkAuthForAgent } from "./codex-auth.js";
 import { findLaunchProfile, formatLaunchProfileBehavior } from "./codex-launch.js";
 import { loadConfig } from "./config.js";
 import { SessionRegistry } from "./session-registry.js";
@@ -9,20 +10,30 @@ let bot: ReturnType<typeof createBot> | undefined;
 
 try {
   const config = loadConfig();
+  initAgentState(config.workspace);
   registry = new SessionRegistry(config);
   bot = createBot(config, registry);
   await registerCommands(bot);
 
-  console.log("TeleCodex running");
-  const authStatus = await checkAuthStatus(config.codexApiKey);
-  console.log(`Auth: ${authStatus.authenticated ? "authenticated" : "not authenticated"} (${authStatus.method})`);
-  if (!authStatus.authenticated) {
-    console.warn("Warning: Codex is not authenticated. Use /login or set CODEX_API_KEY.");
+  const activeAgent = getActiveAgent();
+  console.log(`TeleCodex running — active agent: ${agentDisplayName(activeAgent)}`);
+
+  const codexAuth = await checkAuthForAgent("codex");
+  const claudeAuth = await checkAuthForAgent("claude");
+
+  const authLine = (label: string, auth: typeof codexAuth) =>
+    `  ${label}: ${auth.authenticated ? "authenticated" : "not authenticated"} (${auth.method})`;
+
+  console.log("Auth status:");
+  console.log(authLine("Codex", codexAuth));
+  console.log(authLine("Claude Code", claudeAuth));
+
+  if (!codexAuth.authenticated && !claudeAuth.authenticated) {
+    console.warn("Warning: neither agent is authenticated. Run 'codex login' or 'claude' on the host to log in.");
   }
+
   console.log(`Workspace root: ${config.workspaceRoot}`);
-  if (config.codexModel) {
-    console.log(`Default model: ${config.codexModel}`);
-  }
+
   const defaultLaunchProfile = findLaunchProfile(config.launchProfiles, config.defaultLaunchProfileId);
   if (defaultLaunchProfile) {
     console.log(

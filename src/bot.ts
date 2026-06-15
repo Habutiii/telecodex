@@ -4,9 +4,14 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 
 import { autoRetry } from "@grammyjs/auto-retry";
-import type { ModelReasoningEffort } from "@openai/codex-sdk";
 import { Bot, InlineKeyboard, InputFile, type Context } from "grammy";
 
+import {
+  agentDisplayName,
+  getActiveAgent,
+  setActiveAgent,
+  type AgentType,
+} from "./agent-state.js";
 import {
   buildFileInstructions,
   cleanupInbox,
@@ -29,7 +34,13 @@ import {
   type CodexSessionService,
   listWorkspaceDirectories,
 } from "./codex-session.js";
-import { checkAuthStatus, checkAuthStatusWithRetry, clearAuthCache, startLogin } from "./codex-auth.js";
+import {
+  checkAuthForAgent,
+  checkAuthStatus,
+  checkAuthStatusWithRetry,
+  clearAuthCache,
+  startLogin,
+} from "./codex-auth.js";
 import {
   findLaunchProfile,
   formatLaunchProfileBehavior,
@@ -59,6 +70,17 @@ const NOOP_PAGE_CALLBACK_DATA = "noop_page";
 const LAUNCH_PROFILES_COMMAND = "/launch_profiles";
 const AUTH_RETRY_DELAY_MS = 1_000;
 const PROMPT_STARTUP_MAX_RETRIES = 3;
+const SWITCH_AGENT_CALLBACK_PREFIX = "switch_agent_";
+
+// Returns a human-readable label for the currently active agent.
+function activeAgentLabel(): string {
+  return agentDisplayName(getActiveAgent());
+}
+
+// Returns the CLI binary name for the currently active agent (used in handback message).
+function activeAgentCli(): string {
+  return getActiveAgent() === "claude" ? "claude" : "codex";
+}
 
 type TelegramChatId = number | string;
 type TelegramParseMode = "HTML";
@@ -318,22 +340,23 @@ export function createBot(config: TeleCodexConfig, registry: SessionRegistry): B
 
   const sendPromptStartupFailure = async (ctx: Context, failure: PromptStartupFailure): Promise<void> => {
     if (failure.type === "auth") {
+      const agentName = activeAgentLabel();
       await safeReply(
         ctx,
         [
-          "<b>⚠️ Codex is not authenticated.</b>",
+          `<b>⚠️ ${escapeHTML(agentName)} is not authenticated.</b>`,
           "",
           `<code>${escapeHTML(failure.detail)}</code>`,
           "",
-          "Use /login to start authentication, or set CODEX_API_KEY on the host.",
+          "Use /login to start authentication or run the CLI on the host.",
         ].join("\n"),
         {
           fallbackText: [
-            "⚠️ Codex is not authenticated.",
+            `⚠️ ${agentName} is not authenticated.`,
             "",
             failure.detail,
             "",
-            "Use /login to start authentication, or set CODEX_API_KEY on the host.",
+            "Use /login to start authentication or run the CLI on the host.",
           ].join("\n"),
         },
       );
@@ -387,7 +410,7 @@ export function createBot(config: TeleCodexConfig, registry: SessionRegistry): B
     session: CodexSessionService,
     options?: { authAttempts?: number; threadAttempts?: number; suppressErrorReply?: boolean },
   ): Promise<{ ok: true } | { ok: false; failure: PromptStartupFailure }> => {
-    const authStatus = await checkAuthStatusWithRetry(config.codexApiKey, {
+    const authStatus = await checkAuthStatusWithRetry({
       attempts: options?.authAttempts ?? 2,
       delayMs: AUTH_RETRY_DELAY_MS,
     });
@@ -993,11 +1016,11 @@ export function createBot(config: TeleCodexConfig, registry: SessionRegistry): B
     }
 
     const { contextKey, session } = contextSession;
-    const authStatus = await checkAuthStatus(config.codexApiKey);
+    const authStatus = await checkAuthStatus();
     const authWarning =
       authStatus.authenticated || authStatus.method !== "none"
         ? undefined
-        : "Not authenticated. Use /login or set CODEX_API_KEY.";
+        : `Not authenticated. Use /login or run the ${activeAgentLabel()} CLI on the host.`;
     const isReturning = registry.hasMetadata(contextKey);
 
     if (isReturning) {
@@ -1010,7 +1033,7 @@ export function createBot(config: TeleCodexConfig, registry: SessionRegistry): B
       );
       await safeReply(ctx, welcome.html, { fallbackText: welcome.plain });
     } else {
-      const welcome = renderWelcomeFirstTime(authWarning);
+      const welcome = renderWelcomeFirstTime(authWarning, activeAgentLabel());
       const info = session.getInfo();
       await safeReply(ctx, [welcome.html, "", renderLaunchSummaryHTML(info)].join("\n"), {
         fallbackText: [welcome.plain, "", renderLaunchSummaryPlain(info)].join("\n"),
@@ -1028,7 +1051,7 @@ export function createBot(config: TeleCodexConfig, registry: SessionRegistry): B
       return;
     }
 
-    const authStatus = await checkAuthStatus(config.codexApiKey);
+    const authStatus = await checkAuthStatus();
     const icon = authStatus.authenticated ? "✅" : authStatus.method === "none" ? "❌" : "⚠️";
     const statusLabel = authStatus.authenticated
       ? "authenticated"
@@ -1036,12 +1059,12 @@ export function createBot(config: TeleCodexConfig, registry: SessionRegistry): B
         ? "not authenticated"
         : "status check failed";
     const html = [
-      `<b>${icon} Auth status:</b> ${statusLabel}`,
+      `<b>${icon} ${escapeHTML(activeAgentLabel())} auth status:</b> ${statusLabel}`,
       `<b>Method:</b> <code>${escapeHTML(authStatus.method)}</code>`,
       `<b>Detail:</b> <code>${escapeHTML(authStatus.detail)}</code>`,
     ].join("\n");
     const plain = [
-      `${icon} Auth status: ${statusLabel}`,
+      `${icon} ${activeAgentLabel()} auth status: ${statusLabel}`,
       `Method: ${authStatus.method}`,
       `Detail: ${authStatus.detail}`,
     ].join("\n");
@@ -1054,7 +1077,7 @@ export function createBot(config: TeleCodexConfig, registry: SessionRegistry): B
       return;
     }
 
-    const authStatus = await checkAuthStatus(config.codexApiKey);
+    const authStatus = await checkAuthStatus();
     if (authStatus.authenticated) {
       await safeReply(ctx, `<b>✅ Already authenticated</b> via <code>${escapeHTML(authStatus.method)}</code>.`, {
         fallbackText: `✅ Already authenticated via ${authStatus.method}.`,
@@ -1070,7 +1093,7 @@ export function createBot(config: TeleCodexConfig, registry: SessionRegistry): B
           "",
           `<code>${escapeHTML(authStatus.detail)}</code>`,
           "",
-          "Try your prompt again. If this keeps happening, fix the Codex CLI configuration on the host.",
+          `Try your prompt again. If this keeps happening, fix the ${activeAgentLabel()} CLI configuration on the host.`,
         ].join("\n"),
         {
           fallbackText: [
@@ -1078,7 +1101,7 @@ export function createBot(config: TeleCodexConfig, registry: SessionRegistry): B
             "",
             authStatus.detail,
             "",
-            "Try your prompt again. If this keeps happening, fix the Codex CLI configuration on the host.",
+            `Try your prompt again. If this keeps happening, fix the ${activeAgentLabel()} CLI configuration on the host.`,
           ].join("\n"),
         },
       );
@@ -1086,18 +1109,21 @@ export function createBot(config: TeleCodexConfig, registry: SessionRegistry): B
     }
 
     if (!config.enableTelegramLogin) {
+      const cliHint = getActiveAgent() === "claude"
+        ? "Run `claude` on the host to complete OAuth login."
+        : "Run `codex login` on the host to authenticate.";
       await safeReply(
         ctx,
         [
           "<b>Telegram-initiated login is disabled.</b>",
           "",
-          "Run <code>codex login</code> on the host, or set CODEX_API_KEY in .env.",
+          escapeHTML(cliHint),
         ].join("\n"),
         {
           fallbackText: [
             "Telegram-initiated login is disabled.",
             "",
-            "Run 'codex login' on the host, or set CODEX_API_KEY in .env.",
+            cliHint,
           ].join("\n"),
         },
       );
@@ -1120,7 +1146,7 @@ export function createBot(config: TeleCodexConfig, registry: SessionRegistry): B
   bot.command("quota", async (ctx) => {
     await setReaction(ctx, "👀");
     try {
-      const quota = await readCodexQuota(config.codexApiKey);
+      const quota = await readCodexQuota();
       await safeReply(ctx, formatQuotaHTML(quota, escapeHTML), {
         fallbackText: formatQuotaPlain(quota),
       });
@@ -1131,6 +1157,86 @@ export function createBot(config: TeleCodexConfig, registry: SessionRegistry): B
       });
       await clearReaction(ctx);
     }
+  });
+
+  // ---------------------------------------------------------------------------
+  // /switch_agent — switch between Codex and Claude Code backends
+  // ---------------------------------------------------------------------------
+
+  bot.command("switch_agent", async (ctx) => {
+    if (!ctx.chat) return;
+
+    const contextKey = contextKeyFromCtx(ctx);
+    if (contextKey && isBusy(contextKey)) {
+      await safeReply(ctx, escapeHTML("Cannot switch agent while a prompt is running. Use /abort first."), {
+        fallbackText: "Cannot switch agent while a prompt is running. Use /abort first.",
+      });
+      return;
+    }
+
+    const [codexAuth, claudeAuth] = await Promise.all([
+      checkAuthForAgent("codex"),
+      checkAuthForAgent("claude"),
+    ]);
+
+    const current = getActiveAgent();
+
+    if (!codexAuth.authenticated && !claudeAuth.authenticated) {
+      await safeReply(
+        ctx,
+        "<b>No agents are authenticated.</b>\n\nRun <code>codex login</code> or <code>claude</code> on the host, then restart the bot.",
+        { fallbackText: "No agents are authenticated. Run 'codex login' or 'claude' on the host, then restart the bot." },
+      );
+      return;
+    }
+
+    const keyboard = new InlineKeyboard();
+    const agents: AgentType[] = ["codex", "claude"];
+    for (const agent of agents) {
+      const auth = agent === "codex" ? codexAuth : claudeAuth;
+      if (!auth.authenticated) continue;
+      const isActive = agent === current;
+      const label = `${isActive ? "✅ " : ""}${agentDisplayName(agent)}${isActive ? " (active)" : ""}`;
+      keyboard.text(label, `${SWITCH_AGENT_CALLBACK_PREFIX}${agent}`).row();
+    }
+
+    const currentName = agentDisplayName(current);
+    await safeReply(
+      ctx,
+      `<b>Switch AI agent</b>\n\nCurrently using: <b>${escapeHTML(currentName)}</b>\n\nSelect an agent:`,
+      {
+        fallbackText: `Switch AI agent\n\nCurrently using: ${currentName}\n\nSelect an agent:`,
+        replyMarkup: keyboard,
+      },
+    );
+  });
+
+  bot.callbackQuery(new RegExp(`^${SWITCH_AGENT_CALLBACK_PREFIX}(codex|claude)$`), async (ctx) => {
+    const agentType = ctx.match?.[1] as AgentType | undefined;
+    if (!agentType) {
+      await ctx.answerCallbackQuery();
+      return;
+    }
+
+    const current = getActiveAgent();
+    await ctx.answerCallbackQuery();
+
+    if (agentType === current) {
+      await safeReply(ctx, `Already using <b>${escapeHTML(agentDisplayName(agentType))}</b>.`, {
+        fallbackText: `Already using ${agentDisplayName(agentType)}.`,
+      });
+      return;
+    }
+
+    registry.switchAgent(agentType);
+    setActiveAgent(agentType);
+
+    const newName = agentDisplayName(agentType);
+    await safeReply(
+      ctx,
+      `<b>Switched to ${escapeHTML(newName)}.</b>\n\nYour ${escapeHTML(newName)} sessions are restored. Start a new thread with /new if needed.`,
+      { fallbackText: `Switched to ${newName}.\n\nYour ${newName} sessions are restored. Start a new thread with /new if needed.` },
+    );
   });
 
   bot.command("new", async (ctx) => {
@@ -1298,7 +1404,7 @@ export function createBot(config: TeleCodexConfig, registry: SessionRegistry): B
     const rawName = rawText.replace(/^\/rename(?:@\w+)?\s*/, "");
     try {
       const name = normalizeThreadName(rawName);
-      await renameCodexThread(info.threadId, name, config.codexApiKey);
+      await renameCodexThread(info.threadId, name);
       const refreshed = getThread(info.threadId);
       const displayName = refreshed?.title || name;
       await safeReply(ctx, `<b>Renamed session:</b> ${escapeHTML(displayName)}`, {
@@ -1417,7 +1523,9 @@ export function createBot(config: TeleCodexConfig, registry: SessionRegistry): B
       }
 
       const shellEscape = (value: string): string => `'${value.replace(/'/g, `'\\''`)}'`;
-      const resumeCommand = `cd ${shellEscape(info.workspace)} && codex resume ${shellEscape(info.threadId)}`;
+      const cliName = activeAgentCli();
+      const resumeFlag = getActiveAgent() === "claude" ? "--resume" : "resume";
+      const resumeCommand = `cd ${shellEscape(info.workspace)} && ${cliName} ${resumeFlag} ${shellEscape(info.threadId)}`;
 
       let copiedToClipboard = false;
       if (process.platform === "darwin") {
@@ -1435,7 +1543,7 @@ export function createBot(config: TeleCodexConfig, registry: SessionRegistry): B
       }
 
       const plainText = [
-        "🔄 Thread handed back to Codex CLI.",
+        `🔄 Session handed back to ${activeAgentLabel()} CLI.`,
         "",
         "Run this in your terminal:",
         resumeCommand,
@@ -1448,7 +1556,7 @@ export function createBot(config: TeleCodexConfig, registry: SessionRegistry): B
         .join("\n");
 
       const html = [
-        "<b>🔄 Thread handed back to Codex CLI.</b>",
+        `<b>🔄 Session handed back to ${escapeHTML(activeAgentLabel())} CLI.</b>`,
         "",
         "Run this in your terminal:",
         `<pre>${escapeHTML(resumeCommand)}</pre>`,
@@ -1493,8 +1601,8 @@ export function createBot(config: TeleCodexConfig, registry: SessionRegistry): B
     }
 
     if (!getThread(threadId)) {
-      await safeReply(ctx, `<b>Failed:</b> ${escapeHTML(`Unknown Codex thread: ${threadId}`)}`, {
-        fallbackText: `Failed: Unknown Codex thread: ${threadId}`,
+      await safeReply(ctx, `<b>Failed:</b> ${escapeHTML(`Unknown session: ${threadId}`)}`, {
+        fallbackText: `Failed: Unknown session: ${threadId}`,
       });
       return;
     }
@@ -1679,7 +1787,7 @@ export function createBot(config: TeleCodexConfig, registry: SessionRegistry): B
     }
 
     const { contextKey, session } = contextSession;
-    const efforts: ModelReasoningEffort[] = ["minimal", "low", "medium", "high", "xhigh"];
+    const efforts: string[] = ["minimal", "low", "medium", "high", "xhigh"];
     const current = session.getInfo().reasoningEffort;
     const effortButtons = efforts.map((effort) => ({
       label: effort === current ? `${effort} ✓` : effort,
@@ -2082,7 +2190,7 @@ export function createBot(config: TeleCodexConfig, registry: SessionRegistry): B
   bot.callbackQuery(/^effort_(minimal|low|medium|high|xhigh)$/, async (ctx) => {
     const chatId = ctx.chat?.id;
     const messageId = ctx.callbackQuery.message?.message_id;
-    const effort = ctx.match?.[1] as ModelReasoningEffort | undefined;
+    const effort = ctx.match?.[1] as string | undefined;
 
     if (!chatId || !messageId || !effort) {
       return;
@@ -2172,7 +2280,7 @@ export function createBot(config: TeleCodexConfig, registry: SessionRegistry): B
         { fallbackText: `🎙️ Transcribed: ${preview} (via ${result.backend})` },
       );
     } catch (error) {
-      const note = "Note: voice transcription uses OPENAI_API_KEY, not CODEX_API_KEY.";
+      const note = "Note: voice transcription uses OPENAI_API_KEY (separate from the agent API key).";
       await safeReply(ctx, `<b>Transcription failed:</b>\n${escapeHTML(friendlyErrorText(error))}\n\n<i>${escapeHTML(note)}</i>`, {
         fallbackText: `Transcription failed:\n${friendlyErrorText(error)}\n\n${note}`,
       });
@@ -2375,11 +2483,12 @@ export async function registerCommands(bot: Bot<Context>): Promise<void> {
     { command: "model", description: "View & change model" },
     { command: "effort", description: "Set reasoning effort" },
     { command: "auth", description: "Check auth status" },
-    { command: "quota", description: "Codex quota status" },
+    { command: "quota", description: "Usage & quota for active agent" },
     { command: "login", description: "Start authentication" },
-    { command: "handback", description: "Hand thread to Codex CLI" },
-    { command: "attach", description: "Bind a Codex thread to this topic" },
-    { command: "switch", description: "Switch to a thread by ID" },
+    { command: "handback", description: "Hand session back to CLI" },
+    { command: "attach", description: "Bind a session to this topic" },
+    { command: "switch", description: "Switch to a session by ID" },
+    { command: "switch_agent", description: "Switch between Codex / Claude Code" },
   ]);
 }
 

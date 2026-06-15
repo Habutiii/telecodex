@@ -28,15 +28,16 @@ export function renderHelpMessage(): DualText {
         ["/session", "Current thread details"],
         ["/sessions", "Browse & switch threads"],
         ["/rename", "Rename current thread"],
-        ["/attach", "Bind a Codex thread to this topic"],
-        ["/handback", "Hand thread back to Codex CLI"],
+        ["/attach", "Bind a session to this topic"],
+        ["/handback", "Hand session back to CLI"],
         ["/abort", "Cancel current operation"],
         ["/retry", "Resend the last prompt"],
       ],
     },
     {
-      title: "🤖 Model",
+      title: "🤖 Model & Agent",
       commands: [
+        ["/switch_agent", "Switch between Codex / Claude Code"],
         ["/launch_profiles", "Select launch profile"],
         ["/model", "View & change model"],
         ["/effort", "Set reasoning effort"],
@@ -53,7 +54,7 @@ export function renderHelpMessage(): DualText {
       title: "ℹ️ Utility",
       commands: [
         ["/start", "Welcome & status"],
-        ["/quota", "Codex quota status"],
+        ["/quota", "Usage & quota for active agent"],
         ["/help", "This reference"],
       ],
     },
@@ -89,11 +90,11 @@ export function renderHelpMessage(): DualText {
 /**
  * Short /start message for first-time users (no prior interaction in this context).
  */
-export function renderWelcomeFirstTime(authWarning?: string): DualText {
+export function renderWelcomeFirstTime(authWarning?: string, agentName = "Codex"): DualText {
   const htmlLines = [
     "<b>👋 TeleCodex is ready.</b>",
     "",
-    "Send a message to start chatting with Codex.",
+    `Send a message to start chatting with ${escapeHTML(agentName)}.`,
     "You can also send voice notes, photos, or documents.",
     "",
     "Type /help for all commands.",
@@ -101,7 +102,7 @@ export function renderWelcomeFirstTime(authWarning?: string): DualText {
   const plainLines = [
     "👋 TeleCodex is ready.",
     "",
-    "Send a message to start chatting with Codex.",
+    `Send a message to start chatting with ${agentName}.`,
     "You can also send voice notes, photos, or documents.",
     "",
     "Type /help for all commands.",

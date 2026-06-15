@@ -23,8 +23,11 @@ export interface TeleCodexConfig {
   workspaceRoot: string;
   workspace: string;
   maxFileSize: number;
-  codexApiKey?: string;
+  // OpenAI Codex agent
   codexModel?: string;
+  // Claude Code agent
+  claudeModel?: string;
+  // Shared launch profile config (applies to both agents)
   codexSandboxMode: CodexSandboxMode;
   codexApprovalPolicy: CodexApprovalPolicy;
   launchProfiles: CodexLaunchProfile[];
@@ -44,8 +47,8 @@ export function loadConfig(): TeleCodexConfig {
   const workspaceRoot = resolveWorkspaceRoot(optionalString(process.env.TELECODEX_WORKSPACE_ROOT));
   const workspace = workspaceRoot;
   const maxFileSize = parseMaxFileSize(optionalString(process.env.MAX_FILE_SIZE));
-  const codexApiKey = optionalString(process.env.CODEX_API_KEY);
   const codexModel = optionalString(process.env.CODEX_MODEL);
+  const claudeModel = optionalString(process.env.CLAUDE_MODEL);
   const codexSandboxMode = parseSandboxMode(optionalString(process.env.CODEX_SANDBOX_MODE));
   const codexApprovalPolicy = parseApprovalPolicy(optionalString(process.env.CODEX_APPROVAL_POLICY));
   const enableUnsafeLaunchProfiles = parseBooleanEnv(
@@ -77,8 +80,8 @@ export function loadConfig(): TeleCodexConfig {
     workspaceRoot,
     workspace,
     maxFileSize,
-    codexApiKey,
     codexModel,
+    claudeModel,
     codexSandboxMode,
     codexApprovalPolicy,
     launchProfiles,

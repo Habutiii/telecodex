@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import readline from "node:readline";
+import { getActiveAgent } from "./agent-state.js";
 
 interface JsonRpcMessage {
   id?: number;
@@ -11,21 +12,17 @@ interface JsonRpcMessage {
 const APP_SERVER_TIMEOUT_MS = 15000;
 const MAX_THREAD_NAME_LENGTH = 120;
 
-export async function renameCodexThread(
-  threadId: string,
-  name: string,
-  codexApiKey?: string,
-): Promise<void> {
+export async function renameCodexThread(threadId: string, name: string): Promise<void> {
+  // Claude Code session titles are managed by the CLI — renaming is a no-op here.
+  if (getActiveAgent() === "claude") {
+    normalizeThreadName(name); // still validate the name
+    return;
+  }
   const trimmedName = normalizeThreadName(name);
 
   await new Promise<void>((resolve, reject) => {
-    const env = { ...process.env };
-    if (codexApiKey) {
-      env.CODEX_API_KEY = codexApiKey;
-    }
-
     const child = spawn("codex", ["app-server", "--stdio"], {
-      env,
+      env: process.env,
       stdio: ["pipe", "pipe", "pipe"],
     });
     const stderrChunks: Buffer[] = [];
