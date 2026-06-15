@@ -630,7 +630,7 @@ function buildClaudeArgs(
   }
 
   if (options.launchProfile.sandboxMode === "danger-full-access") {
-    args.push("--allow-dangerously-skip-permissions");
+    args.push("--dangerously-skip-permissions");
   }
 
   args.push(prompt);
