@@ -2494,6 +2494,7 @@ export async function registerCommands(bot: Bot<Context>): Promise<void> {
 
 function renderSessionInfoPlain(info: CodexSessionInfo): string {
   return [
+    `Agent: ${activeAgentLabel()}`,
     `Thread ID: ${info.threadId ?? "(not started yet)"}`,
     `Workspace: ${info.workspace}`,
     `Launch profile: ${info.launchProfileLabel} (${info.launchProfileBehavior})${info.unsafeLaunch ? " [unsafe]" : ""}`,
@@ -2510,6 +2511,7 @@ function renderSessionInfoPlain(info: CodexSessionInfo): string {
 
 function renderSessionInfoHTML(info: CodexSessionInfo): string {
   return [
+    `<b>Agent:</b> ${escapeHTML(activeAgentLabel())}`,
     `<b>Thread ID:</b> <code>${escapeHTML(info.threadId ?? "(not started yet)")}</code>`,
     `<b>Workspace:</b> <code>${escapeHTML(info.workspace)}</code>`,
     `<b>Launch profile:</b> <code>${escapeHTML(info.launchProfileLabel)}</code>`,

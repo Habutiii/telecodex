@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
@@ -11,7 +11,20 @@ import {
   type CodexLaunchProfile,
 } from "./codex-launch.js";
 
-const CLAUDE_BIN = process.env.CLAUDE_CLI_PATH ?? "claude";
+function resolveClaudeBin(): string {
+  if (process.env.CLAUDE_CLI_PATH) return process.env.CLAUDE_CLI_PATH;
+  const candidates = [
+    path.join(homedir(), ".local/bin/claude"),
+    "/usr/local/bin/claude",
+    "/usr/bin/claude",
+  ];
+  for (const c of candidates) {
+    if (existsSync(c)) return c;
+  }
+  return "claude";
+}
+
+const CLAUDE_BIN = resolveClaudeBin();
 
 // ---------------------------------------------------------------------------
 // Public types (preserved interface from the original codex-session.ts)
