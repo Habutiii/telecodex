@@ -41,11 +41,6 @@ import {
   clearAuthCache,
   startLogin,
 } from "./codex-auth.js";
-import {
-  findLaunchProfile,
-  formatLaunchProfileBehavior,
-  formatLaunchProfileLabel,
-} from "./codex-launch.js";
 import { formatQuotaHTML, formatQuotaPlain, readCodexQuota } from "./codex-quota.js";
 import { normalizeThreadName, renameCodexThread } from "./codex-rename.js";
 import { getThread } from "./codex-state.js";
@@ -67,7 +62,6 @@ const FORMATTED_CHUNK_TARGET = 3000;
 const MAX_AUDIO_FILE_SIZE = 25 * 1024 * 1024;
 const KEYBOARD_PAGE_SIZE = 6;
 const NOOP_PAGE_CALLBACK_DATA = "noop_page";
-const LAUNCH_PROFILES_COMMAND = "/behavior";
 const AUTH_RETRY_DELAY_MS = 1_000;
 const PROMPT_STARTUP_MAX_RETRIES = 3;
 const SWITCH_AGENT_CALLBACK_PREFIX = "switch_agent_";
@@ -162,9 +156,6 @@ export function createBot(config: TeleCodexConfig, registry: SessionRegistry): B
   const pendingWorkspacePicks = new Map<TelegramContextKey, string[]>();
   const pendingSessionButtons = new Map<TelegramContextKey, KeyboardItem[]>();
   const pendingWorkspaceButtons = new Map<TelegramContextKey, KeyboardItem[]>();
-  const pendingLaunchPicks = new Map<TelegramContextKey, string[]>();
-  const pendingLaunchButtons = new Map<TelegramContextKey, KeyboardItem[]>();
-  const pendingUnsafeLaunchConfirmations = new Map<TelegramContextKey, string>();
   const pendingModelButtons = new Map<TelegramContextKey, KeyboardItem[]>();
   const pendingEffortButtons = new Map<TelegramContextKey, KeyboardItem[]>();
   const lastPromptInput = new Map<TelegramContextKey, CodexPromptInput>();
@@ -176,9 +167,6 @@ export function createBot(config: TeleCodexConfig, registry: SessionRegistry): B
   registry.onRemove((key) => {
     contextBusy.delete(key);
     contextLabels.delete(key);
-    pendingLaunchPicks.delete(key);
-    pendingLaunchButtons.delete(key);
-    pendingUnsafeLaunchConfirmations.delete(key);
     lastPromptInput.delete(key);
     promptDedup.delete(key);
     promptQueue.clearPending(key);
@@ -230,12 +218,6 @@ export function createBot(config: TeleCodexConfig, registry: SessionRegistry): B
   };
 
   const isTopicContext = (contextKey: TelegramContextKey): boolean => isTopicContextKey(contextKey);
-
-  const clearLaunchSelectionState = (contextKey: TelegramContextKey): void => {
-    pendingLaunchPicks.delete(contextKey);
-    pendingLaunchButtons.delete(contextKey);
-    pendingUnsafeLaunchConfirmations.delete(contextKey);
-  };
 
   const handlePageCallback = (
     pattern: RegExp,
@@ -1413,71 +1395,6 @@ export function createBot(config: TeleCodexConfig, registry: SessionRegistry): B
     }
   });
 
-  const openLaunchProfilesPicker = async (ctx: Context): Promise<void> => {
-    const chatId = ctx.chat?.id;
-    if (!chatId) {
-      return;
-    }
-
-    const contextSession = await getContextSession(ctx, { deferThreadStart: true });
-    if (!contextSession) {
-      return;
-    }
-
-    const { contextKey, session } = contextSession;
-    if (isBusy(contextKey)) {
-      await safeReply(ctx, escapeHTML("Cannot change launch profile while a prompt is running."), {
-        fallbackText: "Cannot change launch profile while a prompt is running.",
-      });
-      return;
-    }
-
-    const info = session.getInfo();
-    const selectedLaunchProfile = session.getSelectedLaunchProfile();
-    const launchButtons = config.launchProfiles.map((profile, index) => ({
-      label: formatLaunchProfileLabel(profile, profile.id === selectedLaunchProfile.id),
-      callbackData: `launch_${index}`,
-    }));
-
-    pendingLaunchPicks.set(
-      contextKey,
-      config.launchProfiles.map((profile) => profile.id),
-    );
-    pendingLaunchButtons.set(contextKey, launchButtons);
-    pendingUnsafeLaunchConfirmations.delete(contextKey);
-
-    const keyboard = paginateKeyboard(launchButtons, 0, "launch");
-    const htmlLines = [
-      `<b>Selected launch profile:</b> <code>${escapeHTML(selectedLaunchProfile.label)}</code>`,
-      `<b>Behavior:</b> <code>${escapeHTML(formatLaunchProfileBehavior(selectedLaunchProfile))}</code>`,
-      "",
-      "Select a profile for new or reattached threads:",
-    ];
-    const plainLines = [
-      `Selected launch profile: ${selectedLaunchProfile.label}`,
-      `Behavior: ${formatLaunchProfileBehavior(selectedLaunchProfile)}`,
-      "",
-      "Select a profile for new or reattached threads:",
-    ];
-
-    if (selectedLaunchProfile.unsafe) {
-      htmlLines.splice(2, 0, "⚠️ <i>Selected profile uses danger-full-access.</i>");
-      plainLines.splice(2, 0, "⚠️ Selected profile uses danger-full-access.");
-    }
-
-    if (info.nextLaunchProfileId) {
-      htmlLines.splice(2, 0, `<b>Active thread still uses:</b> <code>${escapeHTML(info.launchProfileLabel)}</code>`);
-      plainLines.splice(2, 0, `Active thread still uses: ${info.launchProfileLabel}`);
-    }
-
-    await safeReply(ctx, htmlLines.join("\n"), {
-      fallbackText: plainLines.join("\n"),
-      replyMarkup: keyboard,
-    });
-  };
-
-  bot.command("behavior", openLaunchProfilesPicker);
-
 
   bot.command("sessions", async (ctx) => {
     const chatId = ctx.chat?.id;
@@ -1664,12 +1581,6 @@ export function createBot(config: TeleCodexConfig, registry: SessionRegistry): B
   });
   handlePageCallback(/^sess_page_(\d+)$/, "sess", pendingSessionButtons, "Expired, run /sessions again");
   handlePageCallback(/^ws_page_(\d+)$/, "ws", pendingWorkspaceButtons, "Expired, run /new again");
-  handlePageCallback(
-    /^launch_page_(\d+)$/,
-    "launch",
-    pendingLaunchButtons,
-    `Expired, run ${LAUNCH_PROFILES_COMMAND} again`,
-  );
   handlePageCallback(/^model_page_(\d+)$/, "model", pendingModelButtons, "Expired, run /model again");
   handlePageCallback(/^effort_page_(\d+)$/, "effort", pendingEffortButtons, "Expired, run /effort again");
 
@@ -1808,182 +1719,6 @@ export function createBot(config: TeleCodexConfig, registry: SessionRegistry): B
     }
   });
 
-  bot.callbackQuery(/^launch_(\d+)$/, async (ctx) => {
-    const chatId = ctx.chat?.id;
-    const messageId = ctx.callbackQuery.message?.message_id;
-    const index = Number.parseInt(ctx.match?.[1] ?? "", 10);
-
-    if (!chatId || Number.isNaN(index)) {
-      return;
-    }
-
-    const contextSession = await getContextSession(ctx, { deferThreadStart: true });
-    if (!contextSession) {
-      return;
-    }
-
-    const { contextKey, session } = contextSession;
-    const launchProfileIds = pendingLaunchPicks.get(contextKey);
-    const profileId = launchProfileIds?.[index];
-    if (!profileId) {
-      await ctx.answerCallbackQuery({ text: `Expired, run ${LAUNCH_PROFILES_COMMAND} again` });
-      return;
-    }
-
-    if (isBusy(contextKey)) {
-      await ctx.answerCallbackQuery({ text: "Wait for the current prompt to finish" });
-      return;
-    }
-
-    const profile = findLaunchProfile(config.launchProfiles, profileId);
-    if (!profile) {
-      clearLaunchSelectionState(contextKey);
-      await ctx.answerCallbackQuery({ text: "Launch profile no longer exists" });
-      return;
-    }
-
-    if (profile.unsafe) {
-      pendingUnsafeLaunchConfirmations.set(contextKey, profile.id);
-      pendingLaunchPicks.delete(contextKey);
-      pendingLaunchButtons.delete(contextKey);
-
-      await ctx.answerCallbackQuery({ text: "Confirm danger-full-access" });
-      const confirmKeyboard = new InlineKeyboard()
-        .text("Enable danger-full-access", `launchconfirm_yes:${profile.id}`)
-        .row()
-        .text("Cancel", `launchconfirm_no:${profile.id}`);
-      const html = [
-        `<b>Confirm launch profile:</b> <code>${escapeHTML(profile.label)}</code>`,
-        `<b>Behavior:</b> <code>${escapeHTML(formatLaunchProfileBehavior(profile))}</code>`,
-        "",
-        "⚠️ <b>This profile uses danger-full-access.</b>",
-        "It will apply to new or reattached threads in this Telegram context.",
-      ].join("\n");
-      const plain = [
-        `Confirm launch profile: ${profile.label}`,
-        `Behavior: ${formatLaunchProfileBehavior(profile)}`,
-        "",
-        "WARNING: This profile uses danger-full-access.",
-        "It will apply to new or reattached threads in this Telegram context.",
-      ].join("\n");
-
-      if (messageId) {
-        await safeEditMessage(bot, chatId, messageId, html, {
-          fallbackText: plain,
-          replyMarkup: confirmKeyboard,
-        });
-      } else {
-        await safeReply(ctx, html, {
-          fallbackText: plain,
-          replyMarkup: confirmKeyboard,
-        });
-      }
-      return;
-    }
-
-    await ctx.answerCallbackQuery({ text: `Launch set to ${profile.label}` });
-    clearLaunchSelectionState(contextKey);
-    const selectedProfile = session.setLaunchProfile(profile.id);
-    updateSessionMetadata(contextKey, session);
-
-    const html = [
-      `<b>Launch profile set to</b> <code>${escapeHTML(selectedProfile.label)}</code>`,
-      `<b>Behavior:</b> <code>${escapeHTML(formatLaunchProfileBehavior(selectedProfile))}</code>`,
-      "",
-      "Applies to new or reattached threads.",
-    ].join("\n");
-    const plain = [
-      `Launch profile set to ${selectedProfile.label}`,
-      `Behavior: ${formatLaunchProfileBehavior(selectedProfile)}`,
-      "",
-      "Applies to new or reattached threads.",
-    ].join("\n");
-
-    if (messageId) {
-      await safeEditMessage(bot, chatId, messageId, html, { fallbackText: plain });
-    } else {
-      await safeReply(ctx, html, { fallbackText: plain });
-    }
-  });
-
-  bot.callbackQuery(/^launchconfirm_(yes|no):([a-z0-9_-]+)$/, async (ctx) => {
-    const chatId = ctx.chat?.id;
-    const messageId = ctx.callbackQuery.message?.message_id;
-    const action = ctx.match?.[1];
-    const confirmedProfileId = ctx.match?.[2];
-
-    if (!chatId || !messageId || !action || !confirmedProfileId) {
-      return;
-    }
-
-    const contextSession = await getContextSession(ctx, { deferThreadStart: true });
-    if (!contextSession) {
-      return;
-    }
-
-    const { contextKey, session } = contextSession;
-    const profileId = pendingUnsafeLaunchConfirmations.get(contextKey);
-    if (!profileId || profileId !== confirmedProfileId) {
-      await ctx.answerCallbackQuery({ text: `Expired, run ${LAUNCH_PROFILES_COMMAND} again` });
-      return;
-    }
-
-    if (action === "no") {
-      clearLaunchSelectionState(contextKey);
-      await ctx.answerCallbackQuery({ text: "Cancelled" });
-      await safeEditMessage(
-        bot,
-        chatId,
-        messageId,
-        `<b>Launch change cancelled.</b>\n\nRun ${LAUNCH_PROFILES_COMMAND} again to pick another profile.`,
-        {
-          fallbackText: `Launch change cancelled.\n\nRun ${LAUNCH_PROFILES_COMMAND} again to pick another profile.`,
-        },
-      );
-      return;
-    }
-
-    if (isBusy(contextKey)) {
-      await ctx.answerCallbackQuery({ text: "Wait for the current prompt to finish" });
-      return;
-    }
-
-    const profile = findLaunchProfile(config.launchProfiles, profileId);
-    if (!profile) {
-      clearLaunchSelectionState(contextKey);
-      await ctx.answerCallbackQuery({ text: "Launch profile no longer exists" });
-      await safeEditMessage(
-        bot,
-        chatId,
-        messageId,
-        `<b>Launch profile expired.</b>\n\nRun ${LAUNCH_PROFILES_COMMAND} again.`,
-        {
-          fallbackText: `Launch profile expired.\n\nRun ${LAUNCH_PROFILES_COMMAND} again.`,
-        },
-      );
-      return;
-    }
-
-    clearLaunchSelectionState(contextKey);
-    const selectedProfile = session.setLaunchProfile(profile.id);
-    updateSessionMetadata(contextKey, session);
-    await ctx.answerCallbackQuery({ text: `Launch set to ${selectedProfile.label}` });
-
-    const html = [
-      `<b>Launch profile set to</b> <code>${escapeHTML(selectedProfile.label)}</code>`,
-      `<b>Behavior:</b> <code>${escapeHTML(formatLaunchProfileBehavior(selectedProfile))}</code>`,
-      "",
-      "⚠️ <i>danger-full-access confirmed for new or reattached threads.</i>",
-    ].join("\n");
-    const plain = [
-      `Launch profile set to ${selectedProfile.label}`,
-      `Behavior: ${formatLaunchProfileBehavior(selectedProfile)}`,
-      "",
-      "danger-full-access confirmed for new or reattached threads.",
-    ].join("\n");
-
-    await safeEditMessage(bot, chatId, messageId, html, { fallbackText: plain });
-  });
 
   bot.callbackQuery(/^model_(.+)$/, async (ctx) => {
     const chatId = ctx.chat?.id;
@@ -2334,7 +2069,6 @@ export async function registerCommands(bot: Bot<Context>): Promise<void> {
     { command: "rename", description: "Rename current thread" },
     { command: "retry", description: "Resend the last prompt" },
     { command: "abort", description: "Cancel current operation" },
-    { command: "behavior", description: "Select launch behavior" },
     { command: "model", description: "View & change model" },
     { command: "effort", description: "Set reasoning effort" },
     { command: "auth", description: "Check auth status" },

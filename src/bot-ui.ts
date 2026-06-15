@@ -36,7 +36,6 @@ export function renderHelpMessage(): DualText {
       title: "🤖 Model & Agent",
       commands: [
         ["/switch_agent", "Switch between Codex / Claude Code"],
-        ["/behavior", "Select launch behavior"],
         ["/model", "View & change model"],
         ["/effort", "Set reasoning effort"],
       ],
