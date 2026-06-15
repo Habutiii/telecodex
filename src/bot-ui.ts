@@ -28,8 +28,6 @@ export function renderHelpMessage(): DualText {
         ["/session", "Current thread details"],
         ["/sessions", "Browse & switch threads"],
         ["/rename", "Rename current thread"],
-        ["/attach", "Bind a session to this topic"],
-        ["/handback", "Hand session back to CLI"],
         ["/abort", "Cancel current operation"],
         ["/retry", "Resend the last prompt"],
       ],
@@ -38,7 +36,7 @@ export function renderHelpMessage(): DualText {
       title: "🤖 Model & Agent",
       commands: [
         ["/switch_agent", "Switch between Codex / Claude Code"],
-        ["/launch_profiles", "Select launch profile"],
+        ["/behavior", "Select launch behavior"],
         ["/model", "View & change model"],
         ["/effort", "Set reasoning effort"],
       ],

@@ -67,7 +67,7 @@ const FORMATTED_CHUNK_TARGET = 3000;
 const MAX_AUDIO_FILE_SIZE = 25 * 1024 * 1024;
 const KEYBOARD_PAGE_SIZE = 6;
 const NOOP_PAGE_CALLBACK_DATA = "noop_page";
-const LAUNCH_PROFILES_COMMAND = "/launch_profiles";
+const LAUNCH_PROFILES_COMMAND = "/behavior";
 const AUTH_RETRY_DELAY_MS = 1_000;
 const PROMPT_STARTUP_MAX_RETRIES = 3;
 const SWITCH_AGENT_CALLBACK_PREFIX = "switch_agent_";
@@ -77,10 +77,6 @@ function activeAgentLabel(): string {
   return agentDisplayName(getActiveAgent());
 }
 
-// Returns the CLI binary name for the currently active agent (used in handback message).
-function activeAgentCli(): string {
-  return getActiveAgent() === "claude" ? "claude" : "codex";
-}
 
 type TelegramChatId = number | string;
 type TelegramParseMode = "HTML";
@@ -1480,151 +1476,10 @@ export function createBot(config: TeleCodexConfig, registry: SessionRegistry): B
     });
   };
 
-  bot.command(["launch", "launch_profiles"], openLaunchProfilesPicker);
-  bot.hears(/^\/launch-profiles(?:@\w+)?$/i, openLaunchProfilesPicker);
+  bot.command("behavior", openLaunchProfilesPicker);
 
-  bot.command("handback", async (ctx) => {
-    const contextSession = await getContextSession(ctx, { deferThreadStart: true });
-    if (!contextSession) {
-      return;
-    }
 
-    const { contextKey, session } = contextSession;
-    if (isBusy(contextKey)) {
-      await safeReply(ctx, escapeHTML("Cannot hand back while a prompt is running. Use /abort first."), {
-        fallbackText: "Cannot hand back while a prompt is running. Use /abort first.",
-      });
-      return;
-    }
-
-    if (!session.hasActiveThread()) {
-      await safeReply(ctx, escapeHTML("No active thread to hand back."), {
-        fallbackText: "No active thread to hand back.",
-      });
-      return;
-    }
-
-    try {
-      const info = session.handback();
-      updateSessionMetadata(contextKey, session);
-
-      if (!info.threadId) {
-        await safeReply(
-          ctx,
-          escapeHTML(
-            "This thread has not started yet, so there is no resumable thread ID. Send a message to create one, or use /new to start fresh.",
-          ),
-          {
-            fallbackText:
-              "This thread has not started yet, so there is no resumable thread ID. Send a message to create one, or use /new to start fresh.",
-          },
-        );
-        return;
-      }
-
-      const shellEscape = (value: string): string => `'${value.replace(/'/g, `'\\''`)}'`;
-      const cliName = activeAgentCli();
-      const resumeFlag = getActiveAgent() === "claude" ? "--resume" : "resume";
-      const resumeCommand = `cd ${shellEscape(info.workspace)} && ${cliName} ${resumeFlag} ${shellEscape(info.threadId)}`;
-
-      let copiedToClipboard = false;
-      if (process.platform === "darwin") {
-        try {
-          const { spawnSync } = await import("node:child_process");
-          const result = spawnSync("pbcopy", [], {
-            input: resumeCommand,
-            timeout: 2000,
-            stdio: ["pipe", "ignore", "ignore"],
-          });
-          copiedToClipboard = result.status === 0;
-        } catch {
-          // Ignore clipboard failures.
-        }
-      }
-
-      const plainText = [
-        `🔄 Session handed back to ${activeAgentLabel()} CLI.`,
-        "",
-        "Run this in your terminal:",
-        resumeCommand,
-        copiedToClipboard ? "" : undefined,
-        copiedToClipboard ? "📋 Command copied to clipboard!" : undefined,
-        "",
-        "Send any message here to start a new TeleCodex thread.",
-      ]
-        .filter((line): line is string => line !== undefined)
-        .join("\n");
-
-      const html = [
-        `<b>🔄 Session handed back to ${escapeHTML(activeAgentLabel())} CLI.</b>`,
-        "",
-        "Run this in your terminal:",
-        `<pre>${escapeHTML(resumeCommand)}</pre>`,
-        copiedToClipboard ? "" : undefined,
-        copiedToClipboard ? "📋 <i>Command copied to clipboard!</i>" : undefined,
-        "",
-        "Send any message here to start a new TeleCodex thread.",
-      ]
-        .filter((line): line is string => line !== undefined)
-        .join("\n");
-
-      await safeReply(ctx, html, { fallbackText: plainText });
-    } catch (error) {
-      await safeReply(ctx, `<b>Failed:</b> ${escapeHTML(friendlyErrorText(error))}`, {
-        fallbackText: `Failed: ${friendlyErrorText(error)}`,
-      });
-    }
-  });
-
-  bot.command("attach", async (ctx) => {
-    const contextSession = await getContextSession(ctx, { deferThreadStart: true });
-    if (!contextSession) {
-      return;
-    }
-
-    const { contextKey, session } = contextSession;
-    if (isBusy(contextKey)) {
-      await safeReply(ctx, escapeHTML("Cannot attach while a prompt is running."), {
-        fallbackText: "Cannot attach while a prompt is running.",
-      });
-      return;
-    }
-
-    const rawText = ctx.message?.text ?? "";
-    const threadId = rawText.replace(/^\/attach(?:@\w+)?\s*/, "").trim();
-
-    if (!threadId) {
-      await safeReply(ctx, escapeHTML("Usage: /attach <thread-id>"), {
-        fallbackText: "Usage: /attach <thread-id>",
-      });
-      return;
-    }
-
-    if (!getThread(threadId)) {
-      await safeReply(ctx, `<b>Failed:</b> ${escapeHTML(`Unknown session: ${threadId}`)}`, {
-        fallbackText: `Failed: Unknown session: ${threadId}`,
-      });
-      return;
-    }
-
-    const busyState = getBusyState(contextKey);
-    busyState.switching = true;
-    try {
-      const info = await session.switchSession(threadId);
-      updateSessionMetadata(contextKey, session);
-      const html = `<b>Attached to thread.</b>\n\n${renderSessionInfoHTML(info)}`;
-      const plain = `Attached to thread.\n\n${renderSessionInfoPlain(info)}`;
-      await safeReply(ctx, html, { fallbackText: plain });
-    } catch (error) {
-      await safeReply(ctx, `<b>Failed:</b> ${escapeHTML(friendlyErrorText(error))}`, {
-        fallbackText: `Failed: ${friendlyErrorText(error)}`,
-      });
-    } finally {
-      busyState.switching = false;
-    }
-  });
-
-  bot.command(["sessions", "switch"], async (ctx) => {
+  bot.command("sessions", async (ctx) => {
     const chatId = ctx.chat?.id;
     if (!chatId) {
       return;
@@ -1644,7 +1499,7 @@ export function createBot(config: TeleCodexConfig, registry: SessionRegistry): B
     }
 
     const rawText = ctx.message?.text ?? "";
-    const threadId = rawText.replace(/^\/(?:sessions|switch)(?:@\w+)?\s*/, "").trim();
+    const threadId = rawText.replace(/^\/sessions(?:@\w+)?\s*/, "").trim();
 
     if (threadId) {
       const busyState = getBusyState(contextKey);
@@ -2479,15 +2334,12 @@ export async function registerCommands(bot: Bot<Context>): Promise<void> {
     { command: "rename", description: "Rename current thread" },
     { command: "retry", description: "Resend the last prompt" },
     { command: "abort", description: "Cancel current operation" },
-    { command: "launch_profiles", description: "Select launch profile" },
+    { command: "behavior", description: "Select launch behavior" },
     { command: "model", description: "View & change model" },
     { command: "effort", description: "Set reasoning effort" },
     { command: "auth", description: "Check auth status" },
     { command: "quota", description: "Usage & quota for active agent" },
     { command: "login", description: "Start authentication" },
-    { command: "handback", description: "Hand session back to CLI" },
-    { command: "attach", description: "Bind a session to this topic" },
-    { command: "switch", description: "Switch to a session by ID" },
     { command: "switch_agent", description: "Switch between Codex / Claude Code" },
   ]);
 }
@@ -2495,7 +2347,6 @@ export async function registerCommands(bot: Bot<Context>): Promise<void> {
 function renderSessionInfoPlain(info: CodexSessionInfo): string {
   return [
     `Agent: ${activeAgentLabel()}`,
-    `Thread ID: ${info.threadId ?? "(not started yet)"}`,
     `Workspace: ${info.workspace}`,
     `Launch profile: ${info.launchProfileLabel} (${info.launchProfileBehavior})${info.unsafeLaunch ? " [unsafe]" : ""}`,
     info.nextLaunchProfileId
@@ -2512,7 +2363,6 @@ function renderSessionInfoPlain(info: CodexSessionInfo): string {
 function renderSessionInfoHTML(info: CodexSessionInfo): string {
   return [
     `<b>Agent:</b> ${escapeHTML(activeAgentLabel())}`,
-    `<b>Thread ID:</b> <code>${escapeHTML(info.threadId ?? "(not started yet)")}</code>`,
     `<b>Workspace:</b> <code>${escapeHTML(info.workspace)}</code>`,
     `<b>Launch profile:</b> <code>${escapeHTML(info.launchProfileLabel)}</code>`,
     `<b>Launch behavior:</b> <code>${escapeHTML(info.launchProfileBehavior)}</code>${info.unsafeLaunch ? " ⚠️" : ""}`,
