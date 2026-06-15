@@ -6,7 +6,7 @@ cd "$(dirname "$0")"
 git checkout main
 git pull origin main
 npm install
-npm audit fix
+npm audit fix --force
 npm run build
 sudo systemctl daemon-reload
 sudo systemctl restart telecodex
