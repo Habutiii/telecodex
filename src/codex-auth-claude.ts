@@ -1,3 +1,4 @@
+import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
@@ -18,24 +19,52 @@ export interface AuthRetryOptions {
   delayMs?: number;
 }
 
+const COMMAND_TIMEOUT_MS = 10_000;
+const LOGIN_TIMEOUT_MS = 180_000;
 const AUTH_CACHE_TTL_MS = 30_000;
+
+function resolveClaudeBin(): string {
+  if (process.env.CLAUDE_CLI_PATH) return process.env.CLAUDE_CLI_PATH;
+  const candidates = [
+    path.join(homedir(), ".local/bin/claude"),
+    "/usr/local/bin/claude",
+    "/usr/bin/claude",
+  ];
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) return candidate;
+  }
+  return "claude";
+}
+
+const CLAUDE_CLI = resolveClaudeBin();
 
 let cachedAuthStatus: { status: AuthStatus; expiresAt: number } | undefined;
 
-/**
- * Check whether Claude Code is currently authenticated by inspecting ~/.claude/.
- * Results are cached for 30 seconds.
- */
 export async function checkAuthStatus(): Promise<AuthStatus> {
   if (cachedAuthStatus && Date.now() < cachedAuthStatus.expiresAt) {
     return cachedAuthStatus.status;
   }
 
-  const status = checkClaudeCliAuth();
-  if (status.authenticated) {
+  if (process.env.ANTHROPIC_API_KEY) {
+    const status: AuthStatus = {
+      authenticated: true,
+      method: "api-key",
+      detail: "Authenticated via ANTHROPIC_API_KEY",
+    };
     cachedAuthStatus = { status, expiresAt: Date.now() + AUTH_CACHE_TTL_MS };
+    return status;
   }
-  return status;
+
+  try {
+    const { stdout } = await runClaudeCommand(["auth", "status", "--json"]);
+    const status = parseStatusOutput(stdout);
+    if (status.authenticated) {
+      cachedAuthStatus = { status, expiresAt: Date.now() + AUTH_CACHE_TTL_MS };
+    }
+    return status;
+  } catch (error) {
+    return parseCommandError(error);
+  }
 }
 
 export async function checkAuthStatusWithRetry(
@@ -67,57 +96,169 @@ export function clearAuthCache(): void {
   cachedAuthStatus = undefined;
 }
 
-/**
- * Login is not interactive via the bot. Instruct the user to set ANTHROPIC_API_KEY.
- */
 export async function startLogin(): Promise<LoginResult> {
   clearAuthCache();
-  return {
-    success: false,
-    message:
-      "Run `claude` interactively on the host to complete OAuth login, " +
-      "then restart the bot.",
-  };
+
+  try {
+    const { stdout, stderr } = await runClaudeCommand(["auth", "login"], LOGIN_TIMEOUT_MS);
+    const output = stdout.trim() || stderr.trim();
+    return {
+      success: true,
+      message: output || "Claude login completed.",
+    };
+  } catch (error) {
+    const detail = extractErrorMessage(error);
+    return {
+      success: false,
+      message: detail || "Login command failed. Try running 'claude auth login' on the host.",
+    };
+  }
 }
 
-/**
- * Logout is not applicable when using API key auth.
- */
 export async function startLogout(): Promise<LoginResult> {
   clearAuthCache();
-  return {
-    success: false,
-    message:
-      "Run `claude auth logout` on the host to sign out, then restart the bot.",
-  };
+
+  try {
+    const { stdout, stderr } = await runClaudeCommand(["auth", "logout"]);
+    const output = stdout.trim() || stderr.trim();
+    return {
+      success: true,
+      message: output || "Logged out successfully.",
+    };
+  } catch (error) {
+    const detail = extractErrorMessage(error);
+    return {
+      success: false,
+      message: detail || "Logout command failed. Try running 'claude auth logout' on the host.",
+    };
+  }
 }
 
-function checkClaudeCliAuth(): AuthStatus {
-  const claudeDir = path.join(homedir(), ".claude");
-  if (!existsSync(claudeDir)) {
+function parseStatusOutput(output: string): AuthStatus {
+  const trimmed = output.trim();
+  if (!trimmed) {
     return {
       authenticated: false,
-      method: "none",
-      detail: "No Claude Code credentials found. Run `claude` on the host to complete OAuth login.",
+      method: "unknown",
+      detail: "Claude auth status returned no output.",
     };
   }
 
-  // Claude Code stores OAuth state in ~/.claude/settings.json (not a credentials file).
-  // Its presence indicates the user has completed OAuth login via the claude CLI.
-  const settingsPath = path.join(claudeDir, "settings.json");
-  if (existsSync(settingsPath)) {
+  try {
+    const parsed = JSON.parse(trimmed) as {
+      loggedIn?: boolean;
+      authMethod?: string;
+      email?: string;
+      subscriptionType?: string;
+      orgName?: string;
+    };
+    if (parsed.loggedIn) {
+      const detailParts = [
+        "Authenticated via Claude Code CLI",
+        parsed.email,
+        parsed.subscriptionType,
+        parsed.orgName,
+      ].filter((value): value is string => Boolean(value));
+      return {
+        authenticated: true,
+        method: parsed.authMethod === "apiKey" ? "api-key" : "cli",
+        detail: detailParts.join(" | "),
+      };
+    }
     return {
-      authenticated: true,
-      method: "cli",
-      detail: "Authenticated via Claude Code (~/.claude/)",
+      authenticated: false,
+      method: "none",
+      detail: "Not authenticated",
+    };
+  } catch {
+    return {
+      authenticated: false,
+      method: "unknown",
+      detail: trimmed,
+    };
+  }
+}
+
+function runClaudeCommand(
+  args: string[],
+  timeout = COMMAND_TIMEOUT_MS,
+): Promise<{ stdout: string; stderr: string }> {
+  return new Promise((resolve, reject) => {
+    execFile(
+      CLAUDE_CLI,
+      args,
+      {
+        cwd: homedir(),
+        timeout,
+        env: { ...process.env },
+        maxBuffer: 1024 * 1024,
+      },
+      (error, stdout, stderr) => {
+        if (error) {
+          const enriched = error as Error & { stdout?: string; stderr?: string };
+          enriched.stdout = typeof stdout === "string" ? stdout : "";
+          enriched.stderr = typeof stderr === "string" ? stderr : "";
+          reject(enriched);
+          return;
+        }
+        resolve({
+          stdout: typeof stdout === "string" ? stdout : "",
+          stderr: typeof stderr === "string" ? stderr : "",
+        });
+      },
+    );
+  });
+}
+
+function parseCommandError(error: unknown): AuthStatus {
+  const errno = (error as NodeJS.ErrnoException)?.code;
+  if (errno === "ENOENT") {
+    return {
+      authenticated: false,
+      method: "none",
+      detail: "Claude CLI not found. Install it and run 'claude auth login'.",
+    };
+  }
+
+  const detail = extractErrorMessage(error) || "Not authenticated";
+  if (isDefinitiveUnauthenticatedDetail(detail)) {
+    return {
+      authenticated: false,
+      method: "none",
+      detail,
     };
   }
 
   return {
     authenticated: false,
-    method: "none",
-    detail: "No Claude Code credentials found. Set ANTHROPIC_API_KEY or run `claude` on the host.",
+    method: "unknown",
+    detail,
   };
+}
+
+function isDefinitiveUnauthenticatedDetail(detail: string): boolean {
+  return /not logged in|not authenticated|login required|unauthorized|authentication failed/i.test(detail);
+}
+
+function extractErrorMessage(error: unknown): string {
+  if (typeof error === "object" && error !== null) {
+    const enriched = error as { stderr?: string; stdout?: string; message?: string; signal?: string };
+    const stderr = enriched.stderr?.trim();
+    if (stderr) {
+      return stderr;
+    }
+    const stdout = enriched.stdout?.trim();
+    if (stdout) {
+      return stdout;
+    }
+    if (enriched.signal) {
+      return `Command terminated with signal ${enriched.signal}.`;
+    }
+    if (enriched.message) {
+      return enriched.message;
+    }
+  }
+  return error instanceof Error ? error.message : String(error);
 }
 
 function delay(ms: number): Promise<void> {

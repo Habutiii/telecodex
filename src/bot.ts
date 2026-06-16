@@ -1088,7 +1088,7 @@ export function createBot(config: TeleCodexConfig, registry: SessionRegistry): B
 
     if (!config.enableTelegramLogin) {
       const cliHint = getActiveAgent() === "claude"
-        ? "Run `claude` on the host to complete OAuth login."
+        ? "Run `claude auth login` on the host to authenticate."
         : "Run `codex login` on the host to authenticate.";
       await safeReply(
         ctx,
@@ -1162,8 +1162,11 @@ export function createBot(config: TeleCodexConfig, registry: SessionRegistry): B
     if (!codexAuth.authenticated && !claudeAuth.authenticated) {
       await safeReply(
         ctx,
-        "<b>No agents are authenticated.</b>\n\nRun <code>codex login</code> or <code>claude</code> on the host, then restart the bot.",
-        { fallbackText: "No agents are authenticated. Run 'codex login' or 'claude' on the host, then restart the bot." },
+        "<b>No agents are authenticated.</b>\n\nRun <code>codex login</code> or <code>claude auth login</code> on the host, then restart the bot.",
+        {
+          fallbackText:
+            "No agents are authenticated. Run 'codex login' or 'claude auth login' on the host, then restart the bot.",
+        },
       );
       return;
     }

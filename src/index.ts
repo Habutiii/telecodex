@@ -29,7 +29,9 @@ try {
   console.log(authLine("Claude Code", claudeAuth));
 
   if (!codexAuth.authenticated && !claudeAuth.authenticated) {
-    console.warn("Warning: neither agent is authenticated. Run 'codex login' or 'claude' on the host to log in.");
+    console.warn(
+      "Warning: neither agent is authenticated. Run 'codex login' or 'claude auth login' on the host to log in.",
+    );
   }
 
   console.log(`Workspace root: ${config.workspaceRoot}`);
