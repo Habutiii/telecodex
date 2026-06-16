@@ -51,6 +51,8 @@ const ERROR_PATTERNS: Array<{ pattern: RegExp; message: string }> = [
   },
 ];
 
+const AUTHENTICATION_ERROR_PATTERN = /401|unauthorized|authentication|invalid.*api.?key/i;
+
 export function translateError(error: unknown): FriendlyError {
   const raw = extractRawMessage(error);
   const logMessage = raw;
@@ -67,6 +69,10 @@ export function translateError(error: unknown): FriendlyError {
 
 export function friendlyErrorText(error: unknown): string {
   return translateError(error).userMessage;
+}
+
+export function isAuthenticationError(error: unknown): boolean {
+  return AUTHENTICATION_ERROR_PATTERN.test(extractRawMessage(error));
 }
 
 function extractRawMessage(error: unknown): string {

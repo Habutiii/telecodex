@@ -40,13 +40,14 @@ import {
   checkAuthStatusWithRetry,
   clearAuthCache,
   startLogin,
+  startLogout,
 } from "./codex-auth.js";
 import { formatQuotaHTML, formatQuotaPlain, readCodexQuota } from "./codex-quota.js";
 import { normalizeThreadName, renameCodexThread } from "./codex-rename.js";
 import { getThread } from "./codex-state.js";
 import type { TeleCodexConfig, ToolVerbosity } from "./config.js";
 import { contextKeyFromCtx, isTopicContextKey, parseContextKey, type TelegramContextKey } from "./context-key.js";
-import { friendlyErrorText } from "./error-messages.js";
+import { friendlyErrorText, isAuthenticationError } from "./error-messages.js";
 import { escapeHTML, formatTelegramHTML } from "./format.js";
 import { retryAsync } from "./retry.js";
 import { SessionRegistry } from "./session-registry.js";
@@ -909,6 +910,9 @@ export function createBot(config: TeleCodexConfig, registry: SessionRegistry): B
     } catch (error) {
       stopTyping();
       clearFlushTimer();
+      if (isAuthenticationError(error)) {
+        clearAuthCache();
+      }
       if (responseMessagePromise) {
         try {
           await responseMessagePromise;
@@ -1029,6 +1033,7 @@ export function createBot(config: TeleCodexConfig, registry: SessionRegistry): B
       return;
     }
 
+    clearAuthCache();
     const authStatus = await checkAuthStatus();
     const icon = authStatus.authenticated ? "✅" : authStatus.method === "none" ? "❌" : "⚠️";
     const statusLabel = authStatus.authenticated
@@ -1055,11 +1060,19 @@ export function createBot(config: TeleCodexConfig, registry: SessionRegistry): B
       return;
     }
 
+    clearAuthCache();
     const authStatus = await checkAuthStatus();
     if (authStatus.authenticated) {
-      await safeReply(ctx, `<b>✅ Already authenticated</b> via <code>${escapeHTML(authStatus.method)}</code>.`, {
-        fallbackText: `✅ Already authenticated via ${authStatus.method}.`,
-      });
+      const reauthHint = getActiveAgent() === "claude"
+        ? "\n\nIf prompts still fail with 401, run /logout and then /login to refresh Claude CLI credentials."
+        : "";
+      await safeReply(
+        ctx,
+        `<b>✅ Already authenticated</b> via <code>${escapeHTML(authStatus.method)}</code>.${escapeHTML(reauthHint)}`,
+        {
+          fallbackText: `✅ Already authenticated via ${authStatus.method}.${reauthHint}`,
+        },
+      );
       return;
     }
 
@@ -1118,6 +1131,24 @@ export function createBot(config: TeleCodexConfig, registry: SessionRegistry): B
 
     await safeReply(ctx, `<b>❌ Login failed.</b>\n\n<code>${escapeHTML(result.message)}</code>`, {
       fallbackText: `❌ Login failed.\n\n${result.message}`,
+    });
+  });
+
+  bot.command("logout", async (ctx) => {
+    if (!ctx.chat) {
+      return;
+    }
+
+    const result = await startLogout();
+    if (result.success) {
+      await safeReply(ctx, `<b>🔓 Logged out.</b>\n\n<code>${escapeHTML(result.message)}</code>`, {
+        fallbackText: `🔓 Logged out.\n\n${result.message}`,
+      });
+      return;
+    }
+
+    await safeReply(ctx, `<b>❌ Logout failed.</b>\n\n<code>${escapeHTML(result.message)}</code>`, {
+      fallbackText: `❌ Logout failed.\n\n${result.message}`,
     });
   });
 
@@ -2076,6 +2107,7 @@ export async function registerCommands(bot: Bot<Context>): Promise<void> {
     { command: "quota", description: "Usage & quota for active agent" },
     { command: "auth", description: "Check auth status" },
     { command: "login", description: "Start authentication" },
+    { command: "logout", description: "Clear saved authentication" },
     { command: "start", description: "Welcome & status" },
     { command: "help", description: "Command reference" },
   ]);

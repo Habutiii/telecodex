@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { friendlyErrorText, translateError } from "../src/error-messages.js";
+import {
+  friendlyErrorText,
+  isAuthenticationError,
+  translateError,
+} from "../src/error-messages.js";
 
 describe("error-messages", () => {
   describe("translateError", () => {
@@ -102,6 +106,17 @@ describe("error-messages", () => {
     it("returns just the user message string", () => {
       const text = friendlyErrorText(new Error("429 too many requests"));
       expect(text).toContain("Rate limited");
+    });
+  });
+
+  describe("isAuthenticationError", () => {
+    it("detects auth failures", () => {
+      expect(isAuthenticationError(new Error("401 Invalid authentication credentials"))).toBe(true);
+      expect(isAuthenticationError(new Error("Invalid API key provided"))).toBe(true);
+    });
+
+    it("ignores unrelated failures", () => {
+      expect(isAuthenticationError(new Error("429 too many requests"))).toBe(false);
     });
   });
 });
