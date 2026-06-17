@@ -12,7 +12,6 @@ TeleCodex is a Telegram bridge for the OpenAI Codex CLI SDK. It keeps a Codex th
 - **Image input** — send a photo (with optional caption) to pass screenshots or images directly to Codex
 - **File ingest & artifacts** — send a document to stage it for Codex; generated files are delivered back as Telegram documents
 - **Session browser** — `/sessions` lists recent threads from `~/.codex`, grouped by workspace; tap to switch
-- **Telegram login** — `/login` authenticates against the Codex CLI via device auth flow, no terminal needed
 - **Launch profiles** — `/launch_profiles` selects the sandbox + approval mode for new or reattached threads in the current Telegram context (`/launch` remains an alias)
 - **Model picker** — `/model` shows available models and lets you switch for new threads
 - **Reasoning effort** — `/effort` lets you dial from `minimal` to `xhigh` for new threads
@@ -28,9 +27,36 @@ TeleCodex is a Telegram bridge for the OpenAI Codex CLI SDK. It keeps a Codex th
 - A Telegram bot token from [@BotFather](https://t.me/BotFather)
 - The Codex CLI installed and authenticated on the host:
   - API key auth: set `CODEX_API_KEY`
-  - ChatGPT login: `codex login` on the machine, or use `/login` from Telegram
+  - ChatGPT login: `codex login` on the machine
 - *(Optional)* `ffmpeg` — required for local voice transcription via parakeet-coreml
 - *(Optional)* `OPENAI_API_KEY` — enables OpenAI Whisper as a voice transcription fallback
+
+## Claude Code Authentication
+
+TeleCodex runs Claude Code CLI as a subprocess. The CLI authenticates in one of three ways, checked in order:
+
+1. **`ANTHROPIC_API_KEY`** — longest-lived option; use an API key from [console.anthropic.com](https://console.anthropic.com). No expiry.
+2. **`CLAUDE_CODE_OAUTH_TOKEN`** — OAuth access token passed directly to the CLI. Useful if you have a Claude Pro/Max subscription but no API key.
+3. **`claude login` session** — browser-based OAuth stored in `~/.claude/.credentials.json`. These sessions expire in roughly **24 hours**, which will break the bot on a server.
+
+### Getting a long-lived OAuth token
+
+If you are using a Claude subscription (not an API key), extract the token after logging in on the host machine:
+
+```bash
+claude login            # complete the browser OAuth flow once
+cat ~/.claude/.credentials.json
+```
+
+Copy the `claudeAiOauthToken` value (a long `sk-ant-oat-...` string) and set it in `.env`:
+
+```
+CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat-...
+```
+
+The bot will pass this to the Claude Code CLI process via the environment, bypassing the interactive login flow. The token is a refresh token and remains valid until you explicitly revoke it via `claude logout`.
+
+> **Tip:** If you have access to the Anthropic API, `ANTHROPIC_API_KEY` is simpler and never expires.
 
 ## Setup
 
@@ -61,9 +87,10 @@ TeleCodex is a Telegram bridge for the OpenAI Codex CLI SDK. It keeps a Codex th
    | `TOOL_VERBOSITY` | — | `all`, `summary` *(default)*, `errors-only`, `none` |
    | `SHOW_TURN_TOKEN_USAGE` | — | Show the per-turn `in/cached/out` footer in final replies (`false` by default) |
    | `MAX_FILE_SIZE` | — | Max upload size in bytes (default `20971520` = 20 MB) |
-   | `ENABLE_TELEGRAM_LOGIN` | — | Allow `/login` and `/logout` from Telegram (`true` by default) |
    | `ENABLE_TELEGRAM_REACTIONS` | — | Enable Telegram emoji reactions like 👀 / 👍 (`false` by default) |
    | `OPENAI_API_KEY` | — | Enables OpenAI Whisper voice transcription fallback |
+   | `ANTHROPIC_API_KEY` | — | API key auth for Claude Code agent (alternative to `claude login`) |
+   | `CLAUDE_CODE_OAUTH_TOKEN` | — | Long-lived OAuth token for Claude Code agent (see below) |
 
 4. Start the bot:
    ```bash
@@ -86,8 +113,6 @@ TeleCodex is a Telegram bridge for the OpenAI Codex CLI SDK. It keeps a Codex th
 | `/model` | View and change the model |
 | `/effort` | Set reasoning effort: `minimal` · `low` · `medium` · `high` · `xhigh` |
 | `/auth` | Check authentication status |
-| `/login` | Start Codex device-auth flow from Telegram |
-| `/logout` | Sign out of Codex |
 | `/voice` | Check voice transcription backend status |
 | `/handback` | Print `codex resume <id>` for CLI handoff |
 | `/attach <id>` | Bind an existing Codex thread to this forum topic |
@@ -183,7 +208,7 @@ Telegram ←→ Grammy bot (auto-retry, HTML formatting, inline keyboards)
                 │                       reasoning, errors, token usage)
                 ├── CodexStateReader  ──→  ~/.codex/state_*.sqlite  (threads)
                 │                    ──→  ~/.codex/models_cache.json (models)
-                ├── CodexAuth        ──→  codex login/logout subprocess
+                ├── CodexAuth        ──→  codex login status subprocess
                 ├── Attachments      ──→  .telecodex/inbox/<turnId>/ (staged files)
                 ├── Artifacts        ──→  .telecodex/outbox/<turnId>/ (generated files)
                 └── VoiceTranscriber  ──→  parakeet-coreml (local)
@@ -201,7 +226,7 @@ TeleCodex/
 │   ├── codex-launch.ts    — launch profile parsing, validation, and formatting
 │   ├── codex-session.ts   — CodexSessionService wrapping the SDK
 │   ├── codex-state.ts     — SQLite reader for thread/model discovery
-│   ├── codex-auth.ts      — Codex CLI auth (login status, device auth, logout)
+│   ├── codex-auth.ts      — Codex CLI auth (login status check)
 │   ├── session-registry.ts — per-context session map with persistence
 │   ├── context-key.ts     — Telegram chat/topic → context key derivation
 │   ├── attachments.ts     — file staging (sanitization, size limits)
@@ -246,6 +271,5 @@ That playbook covers:
 - Default approval policy is `never` — suited for headless/automated use
 - `/launch_profiles` only selects from validated configured profiles; Telegram users cannot submit arbitrary sandbox or approval values
 - `CODEX_API_KEY` (agent auth) and `OPENAI_API_KEY` (voice transcription) are separate credentials
-- `/login` and `/logout` can be disabled by setting `ENABLE_TELEGRAM_LOGIN=false`
 - Files uploaded via Telegram are sanitized (name, size, type) before staging in the workspace
 - All Markdown output is sanitized before being sent as Telegram HTML
