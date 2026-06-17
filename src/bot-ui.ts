@@ -45,8 +45,6 @@ export function renderHelpMessage(): DualText {
       commands: [
         ["/quota", "Usage & quota for active agent"],
         ["/auth", "Check auth status"],
-        ["/login", "Start authentication"],
-        ["/logout", "Clear saved authentication"],
       ],
     },
     {

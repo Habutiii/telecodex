@@ -31,12 +31,12 @@ describe("error-messages", () => {
 
     it("translates 401 unauthorized", () => {
       const result = translateError(new Error("401 Unauthorized"));
-      expect(result.userMessage).toContain("/login");
+      expect(result.userMessage).toContain("Authentication failed");
     });
 
     it("translates invalid API key", () => {
       const result = translateError(new Error("Invalid API key provided"));
-      expect(result.userMessage).toContain("/login");
+      expect(result.userMessage).toContain("Authentication failed");
     });
 
     it("translates 403 forbidden", () => {

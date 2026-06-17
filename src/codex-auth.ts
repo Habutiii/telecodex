@@ -3,7 +3,7 @@ import { getActiveAgent } from "./agent-state.js";
 import * as openaiAuth from "./codex-auth-openai.js";
 import * as claudeAuth from "./codex-auth-claude.js";
 
-export type { AuthStatus, LoginResult, AuthRetryOptions } from "./codex-auth-openai.js";
+export type { AuthStatus, AuthRetryOptions } from "./codex-auth-openai.js";
 
 export async function checkAuthStatus(): Promise<openaiAuth.AuthStatus> {
   return getActiveAgent() === "claude"
@@ -22,14 +22,6 @@ export async function checkAuthStatusWithRetry(
 export function clearAuthCache(): void {
   openaiAuth.clearAuthCache();
   claudeAuth.clearAuthCache();
-}
-
-export async function startLogin(): Promise<openaiAuth.LoginResult> {
-  return getActiveAgent() === "claude" ? claudeAuth.startLogin() : openaiAuth.startLogin();
-}
-
-export async function startLogout(): Promise<openaiAuth.LoginResult> {
-  return getActiveAgent() === "claude" ? claudeAuth.startLogout() : openaiAuth.startLogout();
 }
 
 // Check auth for a specific agent, regardless of the active agent.

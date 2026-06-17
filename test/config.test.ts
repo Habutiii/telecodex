@@ -26,7 +26,6 @@ describe("loadConfig", () => {
     delete process.env.TOOL_VERBOSITY;
     delete process.env.SHOW_TURN_TOKEN_USAGE;
     delete process.env.MAX_FILE_SIZE;
-    delete process.env.ENABLE_TELEGRAM_LOGIN;
     delete process.env.ENABLE_TELEGRAM_REACTIONS;
     delete process.env.container;
   });
@@ -101,7 +100,6 @@ describe("loadConfig", () => {
       enableUnsafeLaunchProfiles: false,
       toolVerbosity: "all",
       showTurnTokenUsage: false,
-      enableTelegramLogin: true,
       enableTelegramReactions: false,
     });
   });
@@ -144,7 +142,6 @@ describe("loadConfig", () => {
     expect(config.enableUnsafeLaunchProfiles).toBe(false);
     expect(config.toolVerbosity).toBe("summary");
     expect(config.showTurnTokenUsage).toBe(false);
-    expect(config.enableTelegramLogin).toBe(true);
     expect(config.enableTelegramReactions).toBe(false);
     expect(config.workspaceRoot).toBe(process.cwd());
     expect(config.workspace).toBe(process.cwd());
@@ -267,30 +264,6 @@ describe("loadConfig", () => {
     const config = loadConfig();
 
     expect(config.maxFileSize).toBe(5 * 1024 * 1024);
-  });
-
-  it("parses ENABLE_TELEGRAM_LOGIN boolean values", () => {
-    process.env.TELEGRAM_BOT_TOKEN = "bot-token";
-    process.env.TELEGRAM_ALLOWED_USER_IDS = "123";
-
-    const truthyValues = ["true", "1", "yes"];
-    const falsyValues = ["false", "0", "no"];
-
-    for (const value of truthyValues) {
-      process.env.ENABLE_TELEGRAM_LOGIN = value;
-      const config = loadConfig();
-      expect(config.enableTelegramLogin).toBe(true);
-    }
-
-    for (const value of falsyValues) {
-      process.env.ENABLE_TELEGRAM_LOGIN = value;
-      const config = loadConfig();
-      expect(config.enableTelegramLogin).toBe(false);
-    }
-
-    delete process.env.ENABLE_TELEGRAM_LOGIN;
-    const config = loadConfig();
-    expect(config.enableTelegramLogin).toBe(true);
   });
 
   it("parses ENABLE_TELEGRAM_REACTIONS boolean values", () => {

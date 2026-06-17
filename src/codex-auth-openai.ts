@@ -7,11 +7,6 @@ export interface AuthStatus {
   detail: string;
 }
 
-export interface LoginResult {
-  success: boolean;
-  message: string;
-}
-
 export interface AuthRetryOptions {
   attempts?: number;
   delayMs?: number;
@@ -77,51 +72,6 @@ export async function checkAuthStatusWithRetry(
  */
 export function clearAuthCache(): void {
   cachedAuthStatus = undefined;
-}
-
-/**
- * Attempt to start a login flow via the Codex CLI.
- * Uses --device-auth to get a device code flow suitable for headless/remote hosts.
- */
-export async function startLogin(): Promise<LoginResult> {
-  clearAuthCache();
-
-  try {
-    const { stdout } = await runCodexCommand(["login", "--device-auth"]);
-    const output = stdout.trim();
-    return {
-      success: true,
-      message: output || "Login initiated. Check your terminal or browser for the next step.",
-    };
-  } catch (error) {
-    const detail = extractErrorMessage(error);
-    return {
-      success: false,
-      message: detail || "Login command failed. Try running 'codex auth login' on the host.",
-    };
-  }
-}
-
-/**
- * Attempt to logout via the Codex CLI.
- */
-export async function startLogout(): Promise<LoginResult> {
-  clearAuthCache();
-
-  try {
-    const { stdout } = await runCodexCommand(["logout"]);
-    const output = stdout.trim();
-    return {
-      success: true,
-      message: output || "Logged out successfully.",
-    };
-  } catch (error) {
-    const detail = extractErrorMessage(error);
-    return {
-      success: false,
-      message: detail || "Logout command failed. Try running 'codex auth logout' on the host.",
-    };
-  }
 }
 
 function runCodexCommand(args: string[]): Promise<{ stdout: string; stderr: string }> {

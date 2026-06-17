@@ -19,7 +19,7 @@ const ERROR_PATTERNS: Array<{ pattern: RegExp; message: string }> = [
   },
   {
     pattern: /401|unauthorized|authentication|invalid.*api.?key/i,
-    message: "Authentication failed. Use /login to re-authenticate or check your API key.",
+    message: "Authentication failed. Re-authenticate via the CLI on the host or check your API key.",
   },
   {
     pattern: /403|forbidden|permission/i,

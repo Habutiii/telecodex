@@ -161,9 +161,8 @@ sudo -u codex -H codex login
 sudo -u codex -H codex login status
 ```
 
-If the host is headless, you can use TeleCodex `/login` later, provided
-`ENABLE_TELEGRAM_LOGIN=true`. You can also use `CODEX_API_KEY` in `.env` instead
-of a Codex CLI login.
+If the host is headless, you can use `CODEX_API_KEY` in `.env` instead of a
+Codex CLI login.
 
 Confirm the service user owns the Codex state:
 

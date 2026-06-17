@@ -9,18 +9,12 @@ export interface AuthStatus {
   detail: string;
 }
 
-export interface LoginResult {
-  success: boolean;
-  message: string;
-}
-
 export interface AuthRetryOptions {
   attempts?: number;
   delayMs?: number;
 }
 
 const COMMAND_TIMEOUT_MS = 10_000;
-const LOGIN_TIMEOUT_MS = 180_000;
 const AUTH_CACHE_TTL_MS = 30_000;
 
 function resolveClaudeBin(): string {
@@ -94,44 +88,6 @@ export async function checkAuthStatusWithRetry(
 
 export function clearAuthCache(): void {
   cachedAuthStatus = undefined;
-}
-
-export async function startLogin(): Promise<LoginResult> {
-  clearAuthCache();
-
-  try {
-    const { stdout, stderr } = await runClaudeCommand(["auth", "login"], LOGIN_TIMEOUT_MS);
-    const output = stdout.trim() || stderr.trim();
-    return {
-      success: true,
-      message: output || "Claude login completed.",
-    };
-  } catch (error) {
-    const detail = extractErrorMessage(error);
-    return {
-      success: false,
-      message: detail || "Login command failed. Try running 'claude auth login' on the host.",
-    };
-  }
-}
-
-export async function startLogout(): Promise<LoginResult> {
-  clearAuthCache();
-
-  try {
-    const { stdout, stderr } = await runClaudeCommand(["auth", "logout"]);
-    const output = stdout.trim() || stderr.trim();
-    return {
-      success: true,
-      message: output || "Logged out successfully.",
-    };
-  } catch (error) {
-    const detail = extractErrorMessage(error);
-    return {
-      success: false,
-      message: detail || "Logout command failed. Try running 'claude auth logout' on the host.",
-    };
-  }
 }
 
 function parseStatusOutput(output: string): AuthStatus {

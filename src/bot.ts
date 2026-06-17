@@ -39,8 +39,6 @@ import {
   checkAuthStatus,
   checkAuthStatusWithRetry,
   clearAuthCache,
-  startLogin,
-  startLogout,
 } from "./codex-auth.js";
 import { formatQuotaHTML, formatQuotaPlain, readCodexQuota } from "./codex-quota.js";
 import { normalizeThreadName, renameCodexThread } from "./codex-rename.js";
@@ -327,7 +325,7 @@ export function createBot(config: TeleCodexConfig, registry: SessionRegistry): B
           "",
           `<code>${escapeHTML(failure.detail)}</code>`,
           "",
-          "Use /login to start authentication or run the CLI on the host.",
+          "Run the CLI on the host to authenticate.",
         ].join("\n"),
         {
           fallbackText: [
@@ -335,7 +333,7 @@ export function createBot(config: TeleCodexConfig, registry: SessionRegistry): B
             "",
             failure.detail,
             "",
-            "Use /login to start authentication or run the CLI on the host.",
+            "Run the CLI on the host to authenticate.",
           ].join("\n"),
         },
       );
@@ -1002,7 +1000,7 @@ export function createBot(config: TeleCodexConfig, registry: SessionRegistry): B
     const authWarning =
       authStatus.authenticated || authStatus.method !== "none"
         ? undefined
-        : `Not authenticated. Use /login or run the ${activeAgentLabel()} CLI on the host.`;
+        : `Not authenticated. Run the ${activeAgentLabel()} CLI on the host to authenticate.`;
     const isReturning = registry.hasMetadata(contextKey);
 
     if (isReturning) {
@@ -1053,103 +1051,6 @@ export function createBot(config: TeleCodexConfig, registry: SessionRegistry): B
     ].join("\n");
 
     await safeReply(ctx, html, { fallbackText: plain });
-  });
-
-  bot.command("login", async (ctx) => {
-    if (!ctx.chat) {
-      return;
-    }
-
-    clearAuthCache();
-    const authStatus = await checkAuthStatus();
-    if (authStatus.authenticated) {
-      const reauthHint = getActiveAgent() === "claude"
-        ? "\n\nIf prompts still fail with 401, run /logout and then /login to refresh Claude CLI credentials."
-        : "";
-      await safeReply(
-        ctx,
-        `<b>✅ Already authenticated</b> via <code>${escapeHTML(authStatus.method)}</code>.${escapeHTML(reauthHint)}`,
-        {
-          fallbackText: `✅ Already authenticated via ${authStatus.method}.${reauthHint}`,
-        },
-      );
-      return;
-    }
-
-    if (authStatus.method === "unknown") {
-      await safeReply(
-        ctx,
-        [
-          "<b>⚠️ Auth status check failed.</b>",
-          "",
-          `<code>${escapeHTML(authStatus.detail)}</code>`,
-          "",
-          `Try your prompt again. If this keeps happening, fix the ${activeAgentLabel()} CLI configuration on the host.`,
-        ].join("\n"),
-        {
-          fallbackText: [
-            "⚠️ Auth status check failed.",
-            "",
-            authStatus.detail,
-            "",
-            `Try your prompt again. If this keeps happening, fix the ${activeAgentLabel()} CLI configuration on the host.`,
-          ].join("\n"),
-        },
-      );
-      return;
-    }
-
-    if (!config.enableTelegramLogin) {
-      const cliHint = getActiveAgent() === "claude"
-        ? "Run `claude auth login` on the host to authenticate."
-        : "Run `codex login` on the host to authenticate.";
-      await safeReply(
-        ctx,
-        [
-          "<b>Telegram-initiated login is disabled.</b>",
-          "",
-          escapeHTML(cliHint),
-        ].join("\n"),
-        {
-          fallbackText: [
-            "Telegram-initiated login is disabled.",
-            "",
-            cliHint,
-          ].join("\n"),
-        },
-      );
-      return;
-    }
-
-    const result = await startLogin();
-    if (result.success) {
-      await safeReply(ctx, `<b>🔑 Login initiated.</b>\n\n<code>${escapeHTML(result.message)}</code>`, {
-        fallbackText: `🔑 Login initiated.\n\n${result.message}`,
-      });
-      return;
-    }
-
-    await safeReply(ctx, `<b>❌ Login failed.</b>\n\n<code>${escapeHTML(result.message)}</code>`, {
-      fallbackText: `❌ Login failed.\n\n${result.message}`,
-    });
-  });
-
-  bot.command("logout", async (ctx) => {
-    if (!ctx.chat) {
-      return;
-    }
-
-    const result = await startLogout();
-    if (result.success) {
-      await safeReply(ctx, `<b>🔓 Logged out.</b>\n\n<code>${escapeHTML(result.message)}</code>`, {
-        fallbackText: `🔓 Logged out.\n\n${result.message}`,
-      });
-      return;
-    }
-
-    await safeReply(ctx, `<b>❌ Logout failed.</b>\n\n<code>${escapeHTML(result.message)}</code>`, {
-      fallbackText: `❌ Logout failed.\n\n${result.message}`,
-    });
   });
 
   bot.command("quota", async (ctx) => {
@@ -2106,8 +2007,6 @@ export async function registerCommands(bot: Bot<Context>): Promise<void> {
     { command: "switch_agent", description: "Switch between Codex / Claude Code" },
     { command: "quota", description: "Usage & quota for active agent" },
     { command: "auth", description: "Check auth status" },
-    { command: "login", description: "Start authentication" },
-    { command: "logout", description: "Clear saved authentication" },
     { command: "start", description: "Welcome & status" },
     { command: "help", description: "Command reference" },
   ]);

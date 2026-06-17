@@ -11,8 +11,6 @@ import { setActiveAgent } from "../src/agent-state.js";
 import {
   checkAuthStatus,
   clearAuthCache,
-  startLogin,
-  startLogout,
 } from "../src/codex-auth.js";
 
 function mockExecSuccess(stdout: string, stderr = ""): void {
@@ -30,14 +28,6 @@ function mockExecFailure(stderr: string, stdout = "", code?: string): void {
       error.code = code;
     }
     cb(error, stdout, stderr);
-  });
-}
-
-function mockExecNotFound(): void {
-  mockExecFile.mockImplementation((_cmd: string, _args: string[], _opts: unknown, cb: Function) => {
-    const error = new Error("spawn claude ENOENT") as NodeJS.ErrnoException;
-    error.code = "ENOENT";
-    cb(error, "", "");
   });
 }
 
@@ -104,51 +94,4 @@ describe("claude-auth", () => {
     expect(status.detail).toContain("Not logged in");
   });
 
-  it("returns success when Claude CLI login succeeds", async () => {
-    mockExecSuccess("Open this URL to continue login");
-
-    const result = await startLogin();
-
-    expect(result.success).toBe(true);
-    expect(result.message).toContain("Open this URL");
-    expect(mockExecFile).toHaveBeenCalledWith(
-      expect.stringContaining("claude"),
-      ["auth", "login"],
-      expect.objectContaining({ cwd: homedir(), timeout: 180_000 }),
-      expect.any(Function),
-    );
-  });
-
-  it("returns failure when Claude CLI login fails", async () => {
-    mockExecFailure("Browser login failed");
-
-    const result = await startLogin();
-
-    expect(result.success).toBe(false);
-    expect(result.message).toContain("Browser login failed");
-  });
-
-  it("returns failure when Claude CLI is not available", async () => {
-    mockExecNotFound();
-
-    const result = await startLogin();
-
-    expect(result.success).toBe(false);
-    expect(result.message).toContain("ENOENT");
-  });
-
-  it("returns success when Claude CLI logout succeeds", async () => {
-    mockExecSuccess("Logged out");
-
-    const result = await startLogout();
-
-    expect(result.success).toBe(true);
-    expect(result.message).toContain("Logged out");
-    expect(mockExecFile).toHaveBeenCalledWith(
-      expect.stringContaining("claude"),
-      ["auth", "logout"],
-      expect.objectContaining({ cwd: homedir() }),
-      expect.any(Function),
-    );
-  });
 });
