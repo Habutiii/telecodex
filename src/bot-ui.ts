@@ -48,6 +48,14 @@ export function renderHelpMessage(): DualText {
       ],
     },
     {
+      title: "📁 Files",
+      commands: [
+        ["/cd", "Browse & navigate directories"],
+        ["/insert_file", "Insert files into current directory"],
+        ["/done_insert_file", "Exit file insert mode"],
+      ],
+    },
+    {
       title: "ℹ️ Utility",
       commands: [
         ["/start", "Welcome & status"],

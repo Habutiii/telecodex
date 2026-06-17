@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { readFile, unlink, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, stat, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -16,6 +16,7 @@ import {
   buildFileInstructions,
   cleanupInbox,
   outboxPath,
+  sanitizeFilename,
   stageFile,
   type StagedFile,
 } from "./attachments.js";
@@ -157,6 +158,10 @@ export function createBot(config: TeleCodexConfig, registry: SessionRegistry): B
   const pendingWorkspaceButtons = new Map<TelegramContextKey, KeyboardItem[]>();
   const pendingModelButtons = new Map<TelegramContextKey, KeyboardItem[]>();
   const pendingEffortButtons = new Map<TelegramContextKey, KeyboardItem[]>();
+  const contextCdPath = new Map<TelegramContextKey, string>();
+  const insertFileMode = new Map<TelegramContextKey, boolean>();
+  const pendingCdPicks = new Map<TelegramContextKey, string[]>();
+  const pendingCdButtons = new Map<TelegramContextKey, KeyboardItem[]>();
   const lastPromptInput = new Map<TelegramContextKey, CodexPromptInput>();
   const promptDedup = new Map<TelegramContextKey, PromptDedupState>();
   const promptQueue = new TaskQueue<TelegramContextKey>((contextKey, error) => {
@@ -169,6 +174,10 @@ export function createBot(config: TeleCodexConfig, registry: SessionRegistry): B
     lastPromptInput.delete(key);
     promptDedup.delete(key);
     promptQueue.clearPending(key);
+    contextCdPath.delete(key);
+    insertFileMode.delete(key);
+    pendingCdPicks.delete(key);
+    pendingCdButtons.delete(key);
   });
 
   const getBusyState = (
@@ -1511,6 +1520,253 @@ export function createBot(config: TeleCodexConfig, registry: SessionRegistry): B
     });
   });
 
+  // ── cd / insert-file helpers ──────────────────────────────────────────
+
+  const getCdPath = (contextKey: TelegramContextKey, defaultPath: string): string =>
+    contextCdPath.get(contextKey) ?? defaultPath;
+
+  const cdStatusHtml = (cdPath: string, inInsert: boolean): string => {
+    const mode = inInsert ? " <b>(insert file mode)</b>" : "";
+    return `<b>Current directory${inInsert ? " (insert file mode)" : ""}:</b>\n<code>${escapeHTML(cdPath)}</code>`;
+  };
+
+  const cdStatusPlain = (cdPath: string, inInsert: boolean): string =>
+    `Current directory${inInsert ? " (insert file mode)" : ""}:\n${cdPath}`;
+
+  const buildCdKeyboard = async (contextKey: TelegramContextKey, dirPath: string): Promise<InlineKeyboard> => {
+    let subdirs: string[] = [];
+    try {
+      const entries = await readdir(dirPath, { withFileTypes: true });
+      for (const entry of entries) {
+        if (entry.name.startsWith(".")) continue;
+        try {
+          const s = await stat(path.join(dirPath, entry.name));
+          if (s.isDirectory()) subdirs.push(entry.name);
+        } catch {
+          // skip unreadable entries
+        }
+      }
+      subdirs.sort();
+    } catch {
+      // ignore readdir failure
+    }
+
+    const names = ["..", ...subdirs];
+    const resolvedPaths = names.map((n) => path.resolve(dirPath, n));
+    const buttons: KeyboardItem[] = names.map((n, i) => ({
+      label: n === ".." ? "⬆️ .." : `📁 ${n}`,
+      callbackData: `cd_${i}`,
+    }));
+
+    pendingCdPicks.set(contextKey, resolvedPaths);
+    pendingCdButtons.set(contextKey, buttons);
+
+    return paginateKeyboard(buttons, 0, "cd");
+  };
+
+  const BASE_COMMANDS = [
+    { command: "new", description: "Start a new thread" },
+    { command: "sessions", description: "Browse & switch threads" },
+    { command: "abort", description: "Cancel current operation" },
+    { command: "retry", description: "Resend the last prompt" },
+    { command: "session", description: "Current thread details" },
+    { command: "rename", description: "Rename current thread" },
+    { command: "model", description: "View & change model" },
+    { command: "effort", description: "Set reasoning effort" },
+    { command: "switch_agent", description: "Switch between Codex / Claude Code" },
+    { command: "quota", description: "Usage & quota for active agent" },
+    { command: "auth", description: "Check auth status" },
+    { command: "start", description: "Welcome & status" },
+    { command: "help", description: "Command reference" },
+    { command: "cd", description: "Browse & navigate directories" },
+  ];
+
+  const updateChatCommandsForInsertMode = async (chatId: number, inInsertMode: boolean): Promise<void> => {
+    const extra = inInsertMode
+      ? [{ command: "done_insert_file", description: "Exit file insert mode" }]
+      : [{ command: "insert_file", description: "Insert files into current directory" }];
+    await bot.api.setMyCommands([...BASE_COMMANDS, ...extra], {
+      scope: { type: "chat", chat_id: chatId },
+    });
+  };
+
+  // ── /cd command ───────────────────────────────────────────────────────
+
+  bot.command("cd", async (ctx) => {
+    const contextSession = await getContextSession(ctx, { deferThreadStart: true });
+    if (!contextSession) return;
+
+    const { contextKey, session } = contextSession;
+    const workspaceRoot = session.getCurrentWorkspace();
+    const currentPath = getCdPath(contextKey, workspaceRoot);
+    const arg = ctx.match?.trim();
+
+    if (arg) {
+      // /cd <dir>
+      const targetPath = path.resolve(currentPath, arg);
+      try {
+        const s = await stat(targetPath);
+        if (!s.isDirectory()) {
+          await safeReply(ctx, `<b>Not a directory:</b> <code>${escapeHTML(arg)}</code>`, {
+            fallbackText: `Not a directory: ${arg}`,
+          });
+          return;
+        }
+        contextCdPath.set(contextKey, targetPath);
+        const inInsert = insertFileMode.get(contextKey) ?? false;
+        await safeReply(ctx, cdStatusHtml(targetPath, inInsert), {
+          fallbackText: cdStatusPlain(targetPath, inInsert),
+        });
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        await safeReply(ctx, `<b>Error:</b> <code>${escapeHTML(msg)}</code>`, {
+          fallbackText: `Error: ${msg}`,
+        });
+      }
+      return;
+    }
+
+    // /cd without args — show directory picker
+    const inInsert = insertFileMode.get(contextKey) ?? false;
+    const keyboard = await buildCdKeyboard(contextKey, currentPath);
+    await safeReply(
+      ctx,
+      `${cdStatusHtml(currentPath, inInsert)}\n\n<b>Select directory:</b>`,
+      {
+        fallbackText: `${cdStatusPlain(currentPath, inInsert)}\n\nSelect directory:`,
+        replyMarkup: keyboard,
+      },
+    );
+  });
+
+  // ── /insert_file command ──────────────────────────────────────────────
+
+  bot.command("insert_file", async (ctx) => {
+    const chatId = ctx.chat?.id;
+    if (!chatId) return;
+
+    const contextSession = await getContextSession(ctx, { deferThreadStart: true });
+    if (!contextSession) return;
+
+    const { contextKey, session } = contextSession;
+    const workspaceRoot = session.getCurrentWorkspace();
+    const currentPath = getCdPath(contextKey, workspaceRoot);
+
+    if (insertFileMode.get(contextKey)) {
+      await safeReply(ctx, escapeHTML("Already in insert file mode. Use /done_insert_file to exit."), {
+        fallbackText: "Already in insert file mode. Use /done_insert_file to exit.",
+      });
+      return;
+    }
+
+    insertFileMode.set(contextKey, true);
+    await updateChatCommandsForInsertMode(chatId, true).catch(() => {});
+
+    await safeReply(
+      ctx,
+      `${cdStatusHtml(currentPath, true)}\n\n<i>Send images or media to drop them into this directory. Text messages are still forwarded to the agent. Use /done_insert_file to exit.</i>`,
+      {
+        fallbackText: `${cdStatusPlain(currentPath, true)}\n\nSend images or media to drop them into this directory. Text messages are still forwarded to the agent. Use /done_insert_file to exit.`,
+      },
+    );
+  });
+
+  // ── /done_insert_file command ─────────────────────────────────────────
+
+  bot.command("done_insert_file", async (ctx) => {
+    const chatId = ctx.chat?.id;
+    if (!chatId) return;
+
+    const contextKey = contextKeyFromCtx(ctx);
+    if (!contextKey) return;
+
+    if (!insertFileMode.get(contextKey)) {
+      await safeReply(ctx, escapeHTML("Not in insert file mode."), {
+        fallbackText: "Not in insert file mode.",
+      });
+      return;
+    }
+
+    insertFileMode.set(contextKey, false);
+    await updateChatCommandsForInsertMode(chatId, false).catch(() => {});
+
+    const contextSession = await getContextSession(ctx, { deferThreadStart: true });
+    if (!contextSession) return;
+
+    const { session } = contextSession;
+    const workspaceRoot = session.getCurrentWorkspace();
+    const currentPath = getCdPath(contextKey, workspaceRoot);
+
+    const keyboard = await buildCdKeyboard(contextKey, currentPath);
+    await safeReply(
+      ctx,
+      `<b>Exited insert file mode.</b>\n\n${cdStatusHtml(currentPath, false)}\n\n<b>Select directory:</b>`,
+      {
+        fallbackText: `Exited insert file mode.\n\n${cdStatusPlain(currentPath, false)}\n\nSelect directory:`,
+        replyMarkup: keyboard,
+      },
+    );
+  });
+
+  // ── cd callback: directory selected from keyboard ─────────────────────
+
+  bot.callbackQuery(/^cd_(\d+)$/, async (ctx) => {
+    const ctxKey = contextKeyFromCtx(ctx);
+    if (!ctxKey) {
+      await ctx.answerCallbackQuery();
+      return;
+    }
+
+    const index = Number.parseInt(ctx.match?.[1] ?? "", 10);
+    const picks = pendingCdPicks.get(ctxKey);
+
+    if (!picks || Number.isNaN(index) || index >= picks.length) {
+      await ctx.answerCallbackQuery({ text: "Expired, run /cd again" });
+      return;
+    }
+
+    const targetPath = picks[index];
+    try {
+      const s = await stat(targetPath);
+      if (!s.isDirectory()) {
+        await ctx.answerCallbackQuery({ text: "Not a directory" });
+        return;
+      }
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      await ctx.answerCallbackQuery({ text: `Error: ${msg}`.slice(0, 200) });
+      return;
+    }
+
+    contextCdPath.set(ctxKey, targetPath);
+    await ctx.answerCallbackQuery({ text: `cd: ${path.basename(targetPath) || targetPath}` });
+
+    const inInsert = insertFileMode.get(ctxKey) ?? false;
+    const chatId = ctx.chat?.id;
+    const messageId = ctx.callbackQuery.message?.message_id;
+
+    const keyboard = await buildCdKeyboard(ctxKey, targetPath);
+    const html = `${cdStatusHtml(targetPath, inInsert)}\n\n<b>Select directory:</b>`;
+    const plain = `${cdStatusPlain(targetPath, inInsert)}\n\nSelect directory:`;
+
+    if (chatId && messageId) {
+      try {
+        await bot.api.editMessageText(chatId, messageId, html, {
+          parse_mode: "HTML",
+          reply_markup: keyboard,
+        });
+      } catch (error) {
+        if (!isMessageNotModifiedError(error)) {
+          await safeReply(ctx, html, { fallbackText: plain, replyMarkup: keyboard });
+        }
+      }
+    } else {
+      await safeReply(ctx, html, { fallbackText: plain, replyMarkup: keyboard });
+    }
+  });
+
+  // ── end cd / insert-file ──────────────────────────────────────────────
+
   bot.callbackQuery(NOOP_PAGE_CALLBACK_DATA, async (ctx) => {
     await ctx.answerCallbackQuery();
   });
@@ -1518,6 +1774,7 @@ export function createBot(config: TeleCodexConfig, registry: SessionRegistry): B
   handlePageCallback(/^ws_page_(\d+)$/, "ws", pendingWorkspaceButtons, "Expired, run /new again");
   handlePageCallback(/^model_page_(\d+)$/, "model", pendingModelButtons, "Expired, run /model again");
   handlePageCallback(/^effort_page_(\d+)$/, "effort", pendingEffortButtons, "Expired, run /effort again");
+  handlePageCallback(/^cd_page_(\d+)$/, "cd", pendingCdButtons, "Expired, run /cd again");
 
   bot.callbackQuery(/^codex_abort:(.+)$/, async (ctx) => {
     const contextKey = ctx.match?.[1];
@@ -1861,9 +2118,30 @@ export function createBot(config: TeleCodexConfig, registry: SessionRegistry): B
       return;
     } finally {
       busyState.transcribing = false;
-      if (!tempFilePath) {
-        // Download failed — nothing to clean up further
+    }
+
+    if (insertFileMode.get(contextKey)) {
+      // Insert file mode: save photo directly to cdPath
+      const workspaceRoot = session.getCurrentWorkspace();
+      const cdPath = getCdPath(contextKey, workspaceRoot);
+      const ext = ".jpg";
+      const filename = `photo-${randomUUID().slice(0, 8)}${ext}`;
+      const destPath = path.join(cdPath, filename);
+      try {
+        await mkdir(cdPath, { recursive: true });
+        const buffer = await readFile(tempFilePath);
+        await writeFile(destPath, buffer);
+        await safeReply(ctx, `📷 <b>Saved:</b> <code>${escapeHTML(destPath)}</code>`, {
+          fallbackText: `📷 Saved: ${destPath}`,
+        });
+      } catch (error) {
+        await safeReply(ctx, `<b>Failed to save photo:</b> ${escapeHTML(friendlyErrorText(error))}`, {
+          fallbackText: `Failed to save photo: ${friendlyErrorText(error)}`,
+        });
+      } finally {
+        await unlink(tempFilePath).catch(() => {});
       }
+      return;
     }
 
     const caption = ctx.message.caption?.trim();
@@ -1923,10 +2201,34 @@ export function createBot(config: TeleCodexConfig, registry: SessionRegistry): B
       busyState.transcribing = false;
     }
 
-    const turnId = randomUUID().slice(0, 12);
-    const workspace = session.getCurrentWorkspace();
     const originalName = doc.file_name ?? "document";
     const mimeType = doc.mime_type ?? "application/octet-stream";
+
+    if (insertFileMode.get(contextKey)) {
+      // Insert file mode: save document directly to cdPath
+      const workspaceRoot = session.getCurrentWorkspace();
+      const cdPath = getCdPath(contextKey, workspaceRoot);
+      const safeName = sanitizeFilename(originalName);
+      const destPath = path.join(cdPath, safeName);
+      try {
+        await mkdir(cdPath, { recursive: true });
+        const buffer = await readFile(tempFilePath);
+        await writeFile(destPath, buffer);
+        await safeReply(ctx, `📎 <b>Saved:</b> <code>${escapeHTML(destPath)}</code>`, {
+          fallbackText: `📎 Saved: ${destPath}`,
+        });
+      } catch (error) {
+        await safeReply(ctx, `<b>Failed to save file:</b> ${escapeHTML(friendlyErrorText(error))}`, {
+          fallbackText: `Failed to save file: ${friendlyErrorText(error)}`,
+        });
+      } finally {
+        await unlink(tempFilePath).catch(() => {});
+      }
+      return;
+    }
+
+    const turnId = randomUUID().slice(0, 12);
+    const workspace = session.getCurrentWorkspace();
 
     let stagedFile: StagedFile;
     try {
@@ -2009,6 +2311,8 @@ export async function registerCommands(bot: Bot<Context>): Promise<void> {
     { command: "auth", description: "Check auth status" },
     { command: "start", description: "Welcome & status" },
     { command: "help", description: "Command reference" },
+    { command: "cd", description: "Browse & navigate directories" },
+    { command: "insert_file", description: "Insert files into current directory" },
   ]);
 }
 
