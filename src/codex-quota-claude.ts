@@ -96,74 +96,73 @@ function getApiAuth(): ApiAuth | null {
   return null;
 }
 
-function fetchRateLimitHeaders(auth: ApiAuth): Promise<Record<string, string>> {
+interface OauthUsageWindow {
+  utilization: number;
+  resets_at: string | null;
+}
+
+interface OauthUsageResponse {
+  five_hour?: OauthUsageWindow | null;
+  seven_day?: OauthUsageWindow | null;
+}
+
+function fetchOauthUsage(bearerToken: string): Promise<OauthUsageResponse> {
   return new Promise((resolve, reject) => {
-    const body = JSON.stringify({
-      model: "claude-haiku-4-5-20251001",
-      max_tokens: 1,
-      messages: [{ role: "user", content: "hi" }],
-    });
-
-    const authHeader =
-      auth.type === "bearer"
-        ? { Authorization: `Bearer ${auth.value}` }
-        : { "x-api-key": auth.value };
-
     const req = https.request(
       {
         hostname: "api.anthropic.com",
-        path: "/v1/messages",
-        method: "POST",
+        path: "/api/oauth/usage",
+        method: "GET",
         headers: {
-          "Content-Type": "application/json",
-          "anthropic-version": "2023-06-01",
-          ...authHeader,
+          Authorization: `Bearer ${bearerToken}`,
+          "anthropic-beta": "oauth-2025-04-20",
         },
       },
       (res) => {
-        const headers: Record<string, string> = {};
-        for (const [k, v] of Object.entries(res.headers)) {
-          if (typeof v === "string") headers[k.toLowerCase()] = v;
-        }
-        res.resume();
-        resolve(headers);
+        let body = "";
+        res.on("data", (chunk: string) => { body += chunk; });
+        res.on("end", () => {
+          try { resolve(JSON.parse(body) as OauthUsageResponse); }
+          catch { reject(new Error("invalid JSON")); }
+        });
       },
     );
-
     req.setTimeout(10_000, () => reject(new Error("timeout")));
     req.on("error", reject);
-    req.write(body);
     req.end();
   });
 }
 
+function oauthWindowToRateLimit(
+  w: OauthUsageWindow | null | undefined,
+  durationMins: number,
+): CodexRateLimitWindow | null {
+  if (!w) return null;
+  return {
+    usedPercent: Math.round(w.utilization * 10) / 10,
+    windowDurationMins: durationMins,
+    resetsAt: w.resets_at ? new Date(w.resets_at).getTime() / 1000 : null,
+  };
+}
+
 async function readRateLimitWindows(): Promise<{ primary: CodexRateLimitWindow | null; secondary: CodexRateLimitWindow | null }> {
   const auth = getApiAuth();
-  if (!auth) return { primary: null, secondary: null };
+  if (!auth || auth.type !== "bearer") return { primary: null, secondary: null };
 
-  let headers: Record<string, string>;
-  try {
-    headers = await fetchRateLimitHeaders(auth);
-  } catch {
-    return { primary: null, secondary: null };
+  let usage: OauthUsageResponse | null = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      usage = await fetchOauthUsage(auth.value);
+      break;
+    } catch {
+      if (attempt < 2) await new Promise((r) => setTimeout(r, 500));
+    }
   }
-
-  const parse5hUtil = parseFloat(headers["anthropic-ratelimit-unified-5h-utilization"] ?? "");
-  const parse5hReset = parseInt(headers["anthropic-ratelimit-unified-5h-reset"] ?? "");
-  const parse7dUtil = parseFloat(headers["anthropic-ratelimit-unified-7d-utilization"] ?? "");
-  const parse7dReset = parseInt(headers["anthropic-ratelimit-unified-7d-reset"] ?? "");
+  if (!usage) return { primary: null, secondary: null };
 
   return {
-    primary: isNaN(parse5hUtil) ? null : {
-      usedPercent: Math.round(parse5hUtil * 100 * 10) / 10,
-      windowDurationMins: 300,
-      resetsAt: isNaN(parse5hReset) ? null : parse5hReset,
-    },
-    secondary: isNaN(parse7dUtil) ? null : {
-      usedPercent: Math.round(parse7dUtil * 100 * 10) / 10,
-      windowDurationMins: 10080,
-      resetsAt: isNaN(parse7dReset) ? null : parse7dReset,
-    },
+    primary: oauthWindowToRateLimit(usage.five_hour, 300),
+    secondary: oauthWindowToRateLimit(usage.seven_day, 10080),
   };
 }
 
