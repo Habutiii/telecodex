@@ -128,17 +128,16 @@ function parseUsageOutput(text: string): { primary: CodexRateLimitWindow | null;
 }
 
 async function readRateLimitWindows(): Promise<{ primary: CodexRateLimitWindow | null; secondary: CodexRateLimitWindow | null }> {
-  let output: string | null = null;
+  let lastError: unknown;
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
-      output = await runClaudeUsage();
-      break;
-    } catch {
+      return parseUsageOutput(await runClaudeUsage());
+    } catch (err) {
+      lastError = err;
       if (attempt < 2) await new Promise((r) => setTimeout(r, 500));
     }
   }
-  if (!output) return { primary: null, secondary: null };
-  return parseUsageOutput(output);
+  throw lastError;
 }
 
 function getTodayUsage(): DailyUsage {
@@ -292,19 +291,9 @@ function formatQuotaLines(snapshot: CodexRateLimitSnapshot): string[] {
     ["Secondary", snapshot.secondary],
   ] as const;
 
-  let hasWindows = false;
   for (const [label, window] of windows) {
     if (!window) continue;
-    hasWindows = true;
     lines.push(`${label}: ${formatWindow(window)}`);
-  }
-
-  if (!hasWindows) {
-    lines.push("");
-    lines.push("Today's token usage:");
-    lines.push(`  Input:  ${fmt(snapshot.todayInputTokens)}`);
-    lines.push(`  Cached: ${fmt(snapshot.todayCachedTokens)}`);
-    lines.push(`  Output: ${fmt(snapshot.todayOutputTokens)}`);
   }
 
   return lines;
