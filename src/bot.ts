@@ -1191,8 +1191,8 @@ export function createBot(config: TeleCodexConfig, registry: SessionRegistry): B
         const info = await session.newThread(workspaces[0] ?? config.workspace);
         updateSessionMetadata(contextKey, session);
         const label = isTopicContext(contextKey) ? "New thread created for this topic." : "New thread created.";
-        const plainText = `${label}\n\n${renderSessionInfoPlain(info)}`;
-        const html = `<b>${escapeHTML(label)}</b>\n\n${renderSessionInfoHTML(info)}`;
+        const plainText = `${label}\n\n${renderSessionInfoPlain(info, { showProfile: false })}`;
+        const html = `<b>${escapeHTML(label)}</b>\n\n${renderSessionInfoHTML(info, { showProfile: false })}`;
         await safeReply(ctx, html, { fallbackText: plainText });
       } catch (error) {
         await safeReply(ctx, `<b>Failed:</b> ${escapeHTML(friendlyErrorText(error))}`, {
@@ -1890,8 +1890,8 @@ export function createBot(config: TeleCodexConfig, registry: SessionRegistry): B
       const info = await session.newThread(workspace);
       updateSessionMetadata(contextKey, session);
       const label = isTopicContext(contextKey) ? "New thread created for this topic." : "New thread created.";
-      const plainText = `${label}\n\n${renderSessionInfoPlain(info)}`;
-      const html = `<b>${escapeHTML(label)}</b>\n\n${renderSessionInfoHTML(info)}`;
+      const plainText = `${label}\n\n${renderSessionInfoPlain(info, { showProfile: false })}`;
+      const html = `<b>${escapeHTML(label)}</b>\n\n${renderSessionInfoHTML(info, { showProfile: false })}`;
 
       if (messageId) {
         await safeEditMessage(bot, chatId, messageId, html, { fallbackText: plainText });
@@ -2316,12 +2316,12 @@ export async function registerCommands(bot: Bot<Context>): Promise<void> {
   ]);
 }
 
-function renderSessionInfoPlain(info: CodexSessionInfo): string {
+function renderSessionInfoPlain(info: CodexSessionInfo, { showProfile = true } = {}): string {
   return [
     `Agent: ${activeAgentLabel()}`,
     `Workspace: ${info.workspace}`,
-    `Launch profile: ${info.launchProfileLabel} (${info.launchProfileBehavior})${info.unsafeLaunch ? " [unsafe]" : ""}`,
-    info.nextLaunchProfileId
+    showProfile ? `Launch profile: ${info.launchProfileLabel} (${info.launchProfileBehavior})${info.unsafeLaunch ? " [unsafe]" : ""}` : undefined,
+    showProfile && info.nextLaunchProfileId
       ? `Next launch profile: ${info.nextLaunchProfileLabel} (${info.nextLaunchProfileBehavior})${info.nextUnsafeLaunch ? " [unsafe]" : ""}`
       : undefined,
     info.model ? `Model: ${info.model}` : undefined,
@@ -2332,13 +2332,13 @@ function renderSessionInfoPlain(info: CodexSessionInfo): string {
     .join("\n");
 }
 
-function renderSessionInfoHTML(info: CodexSessionInfo): string {
+function renderSessionInfoHTML(info: CodexSessionInfo, { showProfile = true } = {}): string {
   return [
     `<b>Agent:</b> ${escapeHTML(activeAgentLabel())}`,
     `<b>Workspace:</b> <code>${escapeHTML(info.workspace)}</code>`,
-    `<b>Launch profile:</b> <code>${escapeHTML(info.launchProfileLabel)}</code>`,
-    `<b>Launch behavior:</b> <code>${escapeHTML(info.launchProfileBehavior)}</code>${info.unsafeLaunch ? " ⚠️" : ""}`,
-    info.nextLaunchProfileId
+    showProfile ? `<b>Launch profile:</b> <code>${escapeHTML(info.launchProfileLabel)}</code>` : undefined,
+    showProfile ? `<b>Launch behavior:</b> <code>${escapeHTML(info.launchProfileBehavior)}</code>${info.unsafeLaunch ? " ⚠️" : ""}` : undefined,
+    showProfile && info.nextLaunchProfileId
       ? `<b>Next launch profile:</b> <code>${escapeHTML(info.nextLaunchProfileLabel ?? "")}</code> <i>(${escapeHTML(info.nextLaunchProfileBehavior ?? "")})</i>${info.nextUnsafeLaunch ? " ⚠️" : ""}`
       : undefined,
     info.model ? `<b>Model:</b> <code>${escapeHTML(info.model)}</code>` : undefined,
