@@ -1,5 +1,4 @@
-import { execSync } from "node:child_process";
-import https from "node:https";
+import { execSync, spawn } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
@@ -23,6 +22,7 @@ export interface CodexRateLimitWindow {
   usedPercent: number;
   windowDurationMins: number | null;
   resetsAt: number | null;
+  resetsAtStr?: string;
 }
 
 export interface CodexCreditsSnapshot {
@@ -63,11 +63,6 @@ interface DailyUsage {
   outputTokens: number;
 }
 
-interface ApiAuth {
-  type: "bearer" | "apikey";
-  value: string;
-}
-
 function getClaudeAuthStatus(): AuthStatus | null {
   try {
     const output = execSync(`${CLAUDE_BIN} auth status --json`, {
@@ -80,90 +75,70 @@ function getClaudeAuthStatus(): AuthStatus | null {
   }
 }
 
-function getApiAuth(): ApiAuth | null {
-  if (process.env.ANTHROPIC_API_KEY) {
-    return { type: "apikey", value: process.env.ANTHROPIC_API_KEY };
-  }
-  try {
-    const credsPath = path.join(homedir(), ".claude", ".credentials.json");
-    const creds = JSON.parse(readFileSync(credsPath, "utf8")) as Record<string, unknown>;
-    const oauth = creds["claudeAiOauth"] as Record<string, unknown> | undefined;
-    const token = oauth?.["accessToken"] as string | undefined;
-    if (token) return { type: "bearer", value: token };
-  } catch {
-    // fall through
-  }
-  return null;
-}
-
-interface OauthUsageWindow {
-  utilization: number;
-  resets_at: string | null;
-}
-
-interface OauthUsageResponse {
-  five_hour?: OauthUsageWindow | null;
-  seven_day?: OauthUsageWindow | null;
-}
-
-function fetchOauthUsage(bearerToken: string): Promise<OauthUsageResponse> {
+function runClaudeUsage(): Promise<string> {
   return new Promise((resolve, reject) => {
-    const req = https.request(
-      {
-        hostname: "api.anthropic.com",
-        path: "/api/oauth/usage",
-        method: "GET",
-        headers: {
-          Authorization: `Bearer ${bearerToken}`,
-          "anthropic-beta": "oauth-2025-04-20",
-        },
-      },
-      (res) => {
-        let body = "";
-        res.on("data", (chunk: string) => { body += chunk; });
-        res.on("end", () => {
-          try { resolve(JSON.parse(body) as OauthUsageResponse); }
-          catch { reject(new Error("invalid JSON")); }
-        });
-      },
-    );
-    req.setTimeout(10_000, () => reject(new Error("timeout")));
-    req.on("error", reject);
-    req.end();
+    const child = spawn(CLAUDE_BIN, ["-p", "/usage"], {
+      env: process.env,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+
+    let output = "";
+    let settled = false;
+
+    const settle = (fn: () => void): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      child.kill("SIGTERM");
+      fn();
+    };
+
+    const timeout = setTimeout(() => settle(() => reject(new Error("timeout"))), 15_000);
+
+    child.stdout.on("data", (chunk: Buffer) => { output += chunk.toString(); });
+    child.once("error", (err) => settle(() => reject(err)));
+    child.once("close", (code) => {
+      if (output.length > 0) {
+        settle(() => resolve(output));
+      } else {
+        settle(() => reject(new Error(`claude exited with code ${code ?? 1}`)));
+      }
+    });
   });
 }
 
-function oauthWindowToRateLimit(
-  w: OauthUsageWindow | null | undefined,
-  durationMins: number,
-): CodexRateLimitWindow | null {
-  if (!w) return null;
+function parseUsageOutput(text: string): { primary: CodexRateLimitWindow | null; secondary: CodexRateLimitWindow | null } {
+  const sessionMatch = text.match(/Current session:\s*(\d+(?:\.\d+)?)%\s*used(?:[^·\n]*·\s*resets\s+([^\n(]+?))?(?:\s*\(|$|\n)/);
+  const weekMatch = text.match(/Current week[^:]*:\s*(\d+(?:\.\d+)?)%\s*used(?:[^·\n]*·\s*resets\s+([^\n(]+?))?(?:\s*\(|$|\n)/);
+
   return {
-    usedPercent: Math.round(w.utilization * 10) / 10,
-    windowDurationMins: durationMins,
-    resetsAt: w.resets_at ? new Date(w.resets_at).getTime() / 1000 : null,
+    primary: sessionMatch ? {
+      usedPercent: parseFloat(sessionMatch[1]),
+      windowDurationMins: 300,
+      resetsAt: null,
+      resetsAtStr: sessionMatch[2]?.trim() ? `resets ${sessionMatch[2].trim()}` : undefined,
+    } : null,
+    secondary: weekMatch ? {
+      usedPercent: parseFloat(weekMatch[1]),
+      windowDurationMins: 10080,
+      resetsAt: null,
+      resetsAtStr: weekMatch[2]?.trim() ? `resets ${weekMatch[2].trim()}` : undefined,
+    } : null,
   };
 }
 
 async function readRateLimitWindows(): Promise<{ primary: CodexRateLimitWindow | null; secondary: CodexRateLimitWindow | null }> {
-  const auth = getApiAuth();
-  if (!auth || auth.type !== "bearer") return { primary: null, secondary: null };
-
-  let usage: OauthUsageResponse | null = null;
+  let output: string | null = null;
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
-      usage = await fetchOauthUsage(auth.value);
+      output = await runClaudeUsage();
       break;
     } catch {
       if (attempt < 2) await new Promise((r) => setTimeout(r, 500));
     }
   }
-  if (!usage) return { primary: null, secondary: null };
-
-  return {
-    primary: oauthWindowToRateLimit(usage.five_hour, 300),
-    secondary: oauthWindowToRateLimit(usage.seven_day, 10080),
-  };
+  if (!output) return { primary: null, secondary: null };
+  return parseUsageOutput(output);
 }
 
 function getTodayUsage(): DailyUsage {
@@ -278,7 +253,7 @@ function formatWindow(window: CodexRateLimitWindow): string {
   const used = Math.round(window.usedPercent);
   const left = Math.max(0, 100 - used);
   const duration = formatWindowDuration(window.windowDurationMins);
-  const reset = formatReset(window.resetsAt);
+  const reset = window.resetsAtStr ?? formatReset(window.resetsAt);
   return [`${used}% used`, `${left}% left`, duration, reset].filter(Boolean).join(" · ");
 }
 
