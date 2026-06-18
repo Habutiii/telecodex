@@ -74,7 +74,7 @@ function getClaudeAuthStatus(): AuthStatus | null {
     const output = execSync(`${CLAUDE_BIN} auth status --json`, {
       encoding: "utf8",
       timeout: 5000,
-      env: { ...process.env, HOME: claudeUserHome() },
+      env: process.env as Record<string, string>,
     });
     return JSON.parse(output) as AuthStatus;
   } catch {
@@ -97,7 +97,7 @@ function runClaudeUsage(): Promise<string> {
   }
   return new Promise((resolve, reject) => {
     const child = spawn(CLAUDE_BIN, ["-p", "/usage"], {
-      env: { ...process.env, HOME: claudeUserHome() },
+      env: process.env as Record<string, string>,
       stdio: ["ignore", "pipe", "pipe"],
     });
 
@@ -147,7 +147,7 @@ async function fetchRawUsage(): Promise<string> {
 }
 
 function getTodayUsage(): DailyUsage {
-  const projectsDir = path.join(homedir(), ".claude", "projects");
+  const projectsDir = path.join(claudeUserHome(), ".claude", "projects");
   const todayStart = new Date();
   todayStart.setHours(0, 0, 0, 0);
   const todayStartMs = todayStart.getTime();
