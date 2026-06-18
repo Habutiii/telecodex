@@ -47,6 +47,7 @@ export interface CodexRateLimitSnapshot {
   todayInputTokens: number;
   todayCachedTokens: number;
   todayOutputTokens: number;
+  rawOutput: string | null;
 }
 
 interface AuthStatus {
@@ -115,31 +116,11 @@ function runClaudeUsage(): Promise<string> {
   });
 }
 
-function parseUsageOutput(text: string): { primary: CodexRateLimitWindow | null; secondary: CodexRateLimitWindow | null } {
-  const sessionMatch = text.match(/Current session:\s*(\d+(?:\.\d+)?)%\s*used(?:[^·\n]*·\s*resets\s+([^\n(]+?))?(?:\s*\(|$|\n)/);
-  const weekMatch = text.match(/Current week[^:]*:\s*(\d+(?:\.\d+)?)%\s*used(?:[^·\n]*·\s*resets\s+([^\n(]+?))?(?:\s*\(|$|\n)/);
-
-  return {
-    primary: sessionMatch ? {
-      usedPercent: parseFloat(sessionMatch[1]),
-      windowDurationMins: 300,
-      resetsAt: null,
-      resetsAtStr: sessionMatch[2]?.trim() ? `resets ${sessionMatch[2].trim()}` : undefined,
-    } : null,
-    secondary: weekMatch ? {
-      usedPercent: parseFloat(weekMatch[1]),
-      windowDurationMins: 10080,
-      resetsAt: null,
-      resetsAtStr: weekMatch[2]?.trim() ? `resets ${weekMatch[2].trim()}` : undefined,
-    } : null,
-  };
-}
-
-async function readRateLimitWindows(): Promise<{ primary: CodexRateLimitWindow | null; secondary: CodexRateLimitWindow | null }> {
+async function fetchRawUsage(): Promise<string> {
   let lastError: unknown;
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
-      return parseUsageOutput(await runClaudeUsage());
+      return await runClaudeUsage();
     } catch (err) {
       lastError = err;
       if (attempt < 2) await new Promise((r) => setTimeout(r, 500));
@@ -222,18 +203,18 @@ function getTodayUsage(): DailyUsage {
 }
 
 export async function readCodexQuota(): Promise<CodexRateLimitSnapshot> {
-  const [auth, todayUsage, windows] = await Promise.all([
+  const [auth, todayUsage, rawOutput] = await Promise.all([
     Promise.resolve(getClaudeAuthStatus()),
     Promise.resolve(getTodayUsage()),
-    readRateLimitWindows(),
+    fetchRawUsage(),
   ]);
 
   return {
     source: "claude",
     limitId: null,
     limitName: auth?.email ?? null,
-    primary: windows.primary,
-    secondary: windows.secondary,
+    primary: null,
+    secondary: null,
     credits: auth
       ? {
           hasCredits: false,
@@ -249,73 +230,17 @@ export async function readCodexQuota(): Promise<CodexRateLimitSnapshot> {
     todayInputTokens: todayUsage.inputTokens,
     todayCachedTokens: todayUsage.cachedTokens,
     todayOutputTokens: todayUsage.outputTokens,
+    rawOutput,
   };
 }
 
-function fmt(n: number): string {
-  return n.toLocaleString("en-US");
-}
-
-function formatWindow(window: CodexRateLimitWindow): string {
-  const used = Math.round(window.usedPercent);
-  const left = Math.max(0, 100 - used);
-  const duration = formatWindowDuration(window.windowDurationMins);
-  const reset = window.resetsAtStr ?? formatReset(window.resetsAt);
-  return [`${used}% used`, `${left}% left`, duration, reset].filter(Boolean).join(" · ");
-}
-
-function formatWindowDuration(minutes: number | null): string | undefined {
-  if (!minutes) return undefined;
-  if (minutes % (60 * 24) === 0) return `${minutes / (60 * 24)}d window`;
-  if (minutes % 60 === 0) return `${minutes / 60}h window`;
-  return `${minutes}m window`;
-}
-
-function formatReset(resetsAt: number | null): string | undefined {
-  if (!resetsAt) return undefined;
-  const seconds = Math.max(0, Math.round(resetsAt - Date.now() / 1000));
-  if (seconds < 60) return "resets in <1m";
-  const minutes = Math.floor(seconds / 60);
-  const hours = Math.floor(minutes / 60);
-  const days = Math.floor(hours / 24);
-  if (days > 0) return `resets in ${days}d ${hours % 24}h`;
-  if (hours > 0) return `resets in ${hours}h ${minutes % 60}m`;
-  return `resets in ${minutes}m`;
-}
-
-function formatQuotaLines(snapshot: CodexRateLimitSnapshot): string[] {
-  const plan = snapshot.planType
-    ? snapshot.planType.charAt(0).toUpperCase() + snapshot.planType.slice(1)
-    : null;
-  const title = ["Claude Code", plan ? `(${plan})` : undefined].filter(Boolean).join(" ");
-  const lines = [title];
-
-  if (snapshot.email) {
-    lines.push(`Account: ${snapshot.email}`);
-  }
-
-  const windows = [
-    ["Primary", snapshot.primary],
-    ["Secondary", snapshot.secondary],
-  ] as const;
-
-  for (const [label, window] of windows) {
-    if (!window) continue;
-    lines.push(`${label}: ${formatWindow(window)}`);
-  }
-
-  return lines;
-}
-
 export function formatQuotaPlain(snapshot: CodexRateLimitSnapshot): string {
-  return formatQuotaLines(snapshot).join("\n");
+  return snapshot.rawOutput ?? "No usage data available";
 }
 
 export function formatQuotaHTML(
   snapshot: CodexRateLimitSnapshot,
   escape: (text: string) => string,
 ): string {
-  const lines = formatQuotaLines(snapshot);
-  const [title, ...details] = lines;
-  return [`<b>${escape(title)}</b>`, ...details.map(escape)].join("\n");
+  return `<pre>${escape(snapshot.rawOutput ?? "No usage data available")}</pre>`;
 }
