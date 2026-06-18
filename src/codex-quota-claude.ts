@@ -3,10 +3,14 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 
+function claudeUserHome(): string {
+  return process.env.CLAUDE_USER_HOME ?? homedir();
+}
+
 function resolveClaudeBin(): string | null {
   if (process.env.CLAUDE_CLI_PATH) return process.env.CLAUDE_CLI_PATH;
   const candidates = [
-    path.join(homedir(), ".local/bin/claude"),
+    path.join(claudeUserHome(), ".local/bin/claude"),
     "/usr/local/bin/claude",
     "/usr/bin/claude",
   ];
@@ -70,6 +74,7 @@ function getClaudeAuthStatus(): AuthStatus | null {
     const output = execSync(`${CLAUDE_BIN} auth status --json`, {
       encoding: "utf8",
       timeout: 5000,
+      env: { ...process.env, HOME: claudeUserHome() },
     });
     return JSON.parse(output) as AuthStatus;
   } catch {
@@ -87,7 +92,7 @@ function runClaudeUsage(): Promise<string> {
   }
   return new Promise((resolve, reject) => {
     const child = spawn(CLAUDE_BIN, ["-p", "/usage"], {
-      env: process.env,
+      env: { ...process.env, HOME: claudeUserHome() },
       stdio: ["ignore", "pipe", "pipe"],
     });
 
