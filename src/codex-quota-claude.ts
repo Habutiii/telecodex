@@ -25,7 +25,12 @@ function buildClaudeEnv(): Record<string, string> {
     if (v !== undefined) env[k] = v;
   }
   const token = readOAuthToken();
-  if (token) env["CLAUDE_CODE_OAUTH_TOKEN"] = token;
+  if (token) {
+    env["CLAUDE_CODE_OAUTH_TOKEN"] = token;
+    // ANTHROPIC_API_KEY takes precedence over the OAuth token and prevents
+    // /usage from returning subscription data, so clear it when we have OAuth.
+    delete env["ANTHROPIC_API_KEY"];
+  }
   return env;
 }
 
