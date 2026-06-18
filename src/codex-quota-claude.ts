@@ -123,7 +123,10 @@ function runClaudeUsage(): Promise<string> {
       if (hasRealContent) {
         settle(() => resolve(stdout));
       } else {
-        const detail = stderr.trim() || stdout.trim() || `claude exited with code ${code ?? 1}`;
+        const stderrMsg = stderr.trim();
+        const detail = stderrMsg
+          ? stderrMsg
+          : `claude -p /usage produced no usage data (exit code ${code ?? 1}). Check authentication with: claude auth status`;
         settle(() => reject(new Error(detail)));
       }
     });
