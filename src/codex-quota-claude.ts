@@ -3,7 +3,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 
-function resolveClaudeBin(): string {
+function resolveClaudeBin(): string | null {
   if (process.env.CLAUDE_CLI_PATH) return process.env.CLAUDE_CLI_PATH;
   const candidates = [
     path.join(homedir(), ".local/bin/claude"),
@@ -13,7 +13,7 @@ function resolveClaudeBin(): string {
   for (const c of candidates) {
     if (existsSync(c)) return c;
   }
-  return "claude";
+  return null;
 }
 
 const CLAUDE_BIN = resolveClaudeBin();
@@ -64,6 +64,7 @@ interface DailyUsage {
 }
 
 function getClaudeAuthStatus(): AuthStatus | null {
+  if (!CLAUDE_BIN) return null;
   try {
     const output = execSync(`${CLAUDE_BIN} auth status --json`, {
       encoding: "utf8",
@@ -76,6 +77,13 @@ function getClaudeAuthStatus(): AuthStatus | null {
 }
 
 function runClaudeUsage(): Promise<string> {
+  if (!CLAUDE_BIN) {
+    return Promise.reject(
+      new Error(
+        "Claude CLI not found. Set CLAUDE_CLI_PATH to its location or install it to ~/.local/bin/claude",
+      ),
+    );
+  }
   return new Promise((resolve, reject) => {
     const child = spawn(CLAUDE_BIN, ["-p", "/usage"], {
       env: process.env,
