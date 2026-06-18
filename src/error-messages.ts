@@ -71,6 +71,10 @@ export function friendlyErrorText(error: unknown): string {
   return translateError(error).userMessage;
 }
 
+export function rawErrorText(error: unknown): string {
+  return stripStackTrace(extractRawMessage(error));
+}
+
 export function isAuthenticationError(error: unknown): boolean {
   return AUTHENTICATION_ERROR_PATTERN.test(extractRawMessage(error));
 }
