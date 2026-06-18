@@ -46,7 +46,7 @@ import { normalizeThreadName, renameCodexThread } from "./codex-rename.js";
 import { getThread } from "./codex-state.js";
 import type { TeleCodexConfig, ToolVerbosity } from "./config.js";
 import { contextKeyFromCtx, isTopicContextKey, parseContextKey, type TelegramContextKey } from "./context-key.js";
-import { friendlyErrorText, isAuthenticationError, rawErrorText } from "./error-messages.js";
+import { friendlyErrorText, isAuthenticationError } from "./error-messages.js";
 import { escapeHTML, formatTelegramHTML } from "./format.js";
 import { retryAsync } from "./retry.js";
 import { SessionRegistry } from "./session-registry.js";
@@ -1071,8 +1071,8 @@ export function createBot(config: TeleCodexConfig, registry: SessionRegistry): B
       });
       await setReaction(ctx, "🎉");
     } catch (error) {
-      await safeReply(ctx, `<b>Failed to read quota:</b> ${escapeHTML(rawErrorText(error))}`, {
-        fallbackText: `Failed to read quota: ${rawErrorText(error)}`,
+      await safeReply(ctx, `<b>Failed to read quota:</b> ${escapeHTML(friendlyErrorText(error))}`, {
+        fallbackText: `Failed to read quota: ${friendlyErrorText(error)}`,
       });
       await clearReaction(ctx);
     }

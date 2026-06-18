@@ -52,6 +52,7 @@ export interface CodexRateLimitSnapshot {
   todayCachedTokens: number;
   todayOutputTokens: number;
   rawOutput: string | null;
+  rawError: string | null;
 }
 
 interface AuthStatus {
@@ -219,12 +220,29 @@ function getTodayUsage(): DailyUsage {
   return usage;
 }
 
+function isSubscriptionAuth(auth: AuthStatus | null): boolean {
+  return auth?.authMethod === "claude.ai";
+}
+
 export async function readCodexQuota(): Promise<CodexRateLimitSnapshot> {
-  const [auth, todayUsage, rawOutput] = await Promise.all([
+  const [auth, todayUsage] = await Promise.all([
     Promise.resolve(getClaudeAuthStatus()),
     Promise.resolve(getTodayUsage()),
-    fetchRawUsage(),
   ]);
+
+  let rawOutput: string | null = null;
+  let rawError: string | null = null;
+
+  if (!isSubscriptionAuth(auth)) {
+    const method = auth?.authMethod ?? "unknown";
+    rawError = `claude /usage requires Claude.ai subscription auth (current: ${method}). Token counts below are from local session logs.`;
+  } else {
+    try {
+      rawOutput = await fetchRawUsage();
+    } catch (err) {
+      rawError = err instanceof Error ? err.message : String(err);
+    }
+  }
 
   return {
     source: "claude",
@@ -248,16 +266,29 @@ export async function readCodexQuota(): Promise<CodexRateLimitSnapshot> {
     todayCachedTokens: todayUsage.cachedTokens,
     todayOutputTokens: todayUsage.outputTokens,
     rawOutput,
+    rawError,
   };
 }
 
+function formatTokenCounts(snapshot: CodexRateLimitSnapshot): string {
+  return `Today (local logs): ${snapshot.todayInputTokens} input, ${snapshot.todayOutputTokens} output, ${snapshot.todayCachedTokens} cache read`;
+}
+
 export function formatQuotaPlain(snapshot: CodexRateLimitSnapshot): string {
-  return snapshot.rawOutput ?? "No usage data available";
+  if (snapshot.rawOutput) return snapshot.rawOutput;
+  const lines: string[] = [];
+  if (snapshot.rawError) lines.push(`Note: ${snapshot.rawError}`);
+  lines.push(formatTokenCounts(snapshot));
+  return lines.join("\n");
 }
 
 export function formatQuotaHTML(
   snapshot: CodexRateLimitSnapshot,
   escape: (text: string) => string,
 ): string {
-  return `<pre>${escape(snapshot.rawOutput ?? "No usage data available")}</pre>`;
+  if (snapshot.rawOutput) return `<pre>${escape(snapshot.rawOutput)}</pre>`;
+  const lines: string[] = [];
+  if (snapshot.rawError) lines.push(`<i>${escape(snapshot.rawError)}</i>`);
+  lines.push(escape(formatTokenCounts(snapshot)));
+  return lines.join("\n");
 }
