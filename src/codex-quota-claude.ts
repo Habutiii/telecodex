@@ -7,6 +7,28 @@ function claudeUserHome(): string {
   return process.env.CLAUDE_USER_HOME ?? homedir();
 }
 
+function readOAuthToken(): string | null {
+  if (process.env.CLAUDE_CODE_OAUTH_TOKEN) return process.env.CLAUDE_CODE_OAUTH_TOKEN;
+  const credPath = path.join(claudeUserHome(), ".claude", ".credentials.json");
+  try {
+    const raw = readFileSync(credPath, "utf8");
+    const creds = JSON.parse(raw) as { claudeAiOauth?: { accessToken?: string } };
+    return creds.claudeAiOauth?.accessToken ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function buildClaudeEnv(): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const [k, v] of Object.entries(process.env)) {
+    if (v !== undefined) env[k] = v;
+  }
+  const token = readOAuthToken();
+  if (token) env["CLAUDE_CODE_OAUTH_TOKEN"] = token;
+  return env;
+}
+
 function resolveClaudeBin(): string | null {
   if (process.env.CLAUDE_CLI_PATH) return process.env.CLAUDE_CLI_PATH;
   const candidates = [
@@ -75,7 +97,7 @@ function getClaudeAuthStatus(): AuthStatus | null {
     const output = execSync(`${CLAUDE_BIN} auth status --json`, {
       encoding: "utf8",
       timeout: 5000,
-      env: process.env as Record<string, string>,
+      env: buildClaudeEnv(),
     });
     return JSON.parse(output) as AuthStatus;
   } catch {
@@ -98,7 +120,7 @@ function runClaudeUsage(): Promise<string> {
   }
   return new Promise((resolve, reject) => {
     const child = spawn(CLAUDE_BIN, ["-p", "/usage"], {
-      env: process.env as Record<string, string>,
+      env: buildClaudeEnv(),
       stdio: ["ignore", "pipe", "pipe"],
     });
 
@@ -221,7 +243,8 @@ function getTodayUsage(): DailyUsage {
 }
 
 function isSubscriptionAuth(auth: AuthStatus | null): boolean {
-  return auth?.authMethod === "claude.ai";
+  if (auth?.authMethod === "claude.ai") return true;
+  return readOAuthToken() !== null;
 }
 
 export async function readCodexQuota(): Promise<CodexRateLimitSnapshot> {
