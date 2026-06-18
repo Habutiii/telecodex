@@ -82,6 +82,11 @@ function getClaudeAuthStatus(): AuthStatus | null {
   }
 }
 
+// Matches the CLI execution summary that claude always appends to stdout,
+// e.g. "Total cost: $0.0000\nTotal duration (API): 0s\n...". When this is the
+// only stdout content there was no real model response — treat it as a failure.
+const CLI_SUMMARY_ONLY_RE = /^(?:\s*(?:Total cost:|Total duration|Total code changes:|Usage:)[^\n]*\n?)+\s*$/;
+
 function runClaudeUsage(): Promise<string> {
   if (!CLAUDE_BIN) {
     return Promise.reject(
@@ -96,7 +101,8 @@ function runClaudeUsage(): Promise<string> {
       stdio: ["ignore", "pipe", "pipe"],
     });
 
-    let output = "";
+    let stdout = "";
+    let stderr = "";
     let settled = false;
 
     const settle = (fn: () => void): void => {
@@ -109,13 +115,16 @@ function runClaudeUsage(): Promise<string> {
 
     const timeout = setTimeout(() => settle(() => reject(new Error("timeout"))), 15_000);
 
-    child.stdout.on("data", (chunk: Buffer) => { output += chunk.toString(); });
+    child.stdout.on("data", (chunk: Buffer) => { stdout += chunk.toString(); });
+    child.stderr.on("data", (chunk: Buffer) => { stderr += chunk.toString(); });
     child.once("error", (err) => settle(() => reject(err)));
     child.once("close", (code) => {
-      if (output.length > 0) {
-        settle(() => resolve(output));
+      const hasRealContent = stdout.length > 0 && !CLI_SUMMARY_ONLY_RE.test(stdout);
+      if (hasRealContent) {
+        settle(() => resolve(stdout));
       } else {
-        settle(() => reject(new Error(`claude exited with code ${code ?? 1}`)));
+        const detail = stderr.trim() || stdout.trim() || `claude exited with code ${code ?? 1}`;
+        settle(() => reject(new Error(detail)));
       }
     });
   });
