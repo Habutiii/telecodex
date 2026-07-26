@@ -17,8 +17,8 @@ export interface CodexModelRecord {
 }
 
 export const FALLBACK_MODELS: CodexModelRecord[] = [
-  { slug: "gpt-5.4", displayName: "GPT-5.4" },
-  { slug: "gpt-5.4-mini", displayName: "GPT-5.4-Mini" },
+  { slug: "gpt-5.6-terra", displayName: "GPT-5.6 Terra" },
+  { slug: "gpt-5.6-luna", displayName: "GPT-5.6 Luna" },
   { slug: "gpt-5", displayName: "GPT-5" },
   { slug: "o4-mini", displayName: "o4-mini" },
   { slug: "o3", displayName: "o3" },
