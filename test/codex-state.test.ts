@@ -14,6 +14,7 @@ type ThreadFixture = {
 
 type LoadOptions = {
   home?: string;
+  codexHome?: string;
   files?: string[];
   stats?: Record<string, number>;
   threads?: ThreadFixture[];
@@ -23,6 +24,7 @@ type LoadOptions = {
 };
 
 const originalHome = process.env.HOME;
+const originalCodexHome = process.env.CODEX_HOME;
 
 afterEach(() => {
   vi.doUnmock("node:fs");
@@ -34,16 +36,27 @@ afterEach(() => {
   } else {
     process.env.HOME = originalHome;
   }
+
+  if (originalCodexHome === undefined) {
+    delete process.env.CODEX_HOME;
+  } else {
+    process.env.CODEX_HOME = originalCodexHome;
+  }
 });
 
 async function loadCodexState(options: LoadOptions = {}) {
   const home = options.home ?? "/Users/tester";
-  const codexDir = path.join(home, ".codex");
+  const codexDir = options.codexHome ?? path.join(home, ".codex");
   const modelsPath = path.join(codexDir, "models_cache.json");
   const files = options.files ?? [];
   const stats = options.stats ?? {};
   const threads = options.threads ?? [];
   process.env.HOME = home;
+  if (options.codexHome) {
+    process.env.CODEX_HOME = options.codexHome;
+  } else {
+    delete process.env.CODEX_HOME;
+  }
 
   vi.resetModules();
 
@@ -99,7 +112,7 @@ async function loadCodexState(options: LoadOptions = {}) {
     }));
   }
 
-  return await import("../src/codex-state.js");
+  return await import("../src/codex-state-openai.js");
 }
 
 function runAllQuery(sql: string, threads: ThreadFixture[], args: unknown[]) {
@@ -263,7 +276,7 @@ describe("codex-state", () => {
     expect(state.listWorkspaces()).toEqual(["/workspace/a", "/workspace/z"]);
   });
 
-  it("listModels parses models_cache.json and filters hidden models", async () => {
+  it("listModels merges fallback models with models_cache.json and filters hidden models", async () => {
     const state = await loadCodexState({
       modelsJson: JSON.stringify({
         models: [
@@ -275,8 +288,14 @@ describe("codex-state", () => {
     });
 
     expect(state.listModels()).toEqual([
-      { slug: "gpt-5.4", displayName: "GPT-5.4" },
+      { slug: "gpt-5.6-terra", displayName: "GPT-5.6 Terra" },
+      { slug: "gpt-5.6-luna", displayName: "GPT-5.6 Luna" },
+      { slug: "gpt-5", displayName: "GPT-5" },
+      { slug: "o4-mini", displayName: "o4-mini" },
       { slug: "o3", displayName: "o3" },
+      { slug: "o3-mini", displayName: "o3-mini" },
+      { slug: "gpt-4o", displayName: "GPT-4o" },
+      { slug: "gpt-5.4", displayName: "GPT-5.4" },
     ]);
   });
 
@@ -286,6 +305,17 @@ describe("codex-state", () => {
 
     const invalidState = await loadCodexState({ modelsJson: "{not-json" });
     expect(invalidState.listModels()).toEqual(invalidState.FALLBACK_MODELS);
+  });
+
+  it("listModels reads models_cache.json from CODEX_HOME when set", async () => {
+    const state = await loadCodexState({
+      codexHome: "/home/codex/.codex",
+      modelsJson: JSON.stringify({
+        models: [{ slug: "gpt-5.6-terra", display_name: "GPT-5.6 Terra" }],
+      }),
+    });
+
+    expect(state.listModels()[0]).toEqual({ slug: "gpt-5.6-terra", displayName: "GPT-5.6 Terra" });
   });
 
   it("getThread returns null when not found", async () => {

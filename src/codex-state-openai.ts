@@ -150,10 +150,27 @@ export function listModels(): CodexModelRecord[] {
       }))
       .filter((model) => model.slug && model.displayName);
 
-    return models.length > 0 ? models : FALLBACK_MODELS;
+    return models.length > 0 ? mergeModels(FALLBACK_MODELS, models) : FALLBACK_MODELS;
   } catch {
     return FALLBACK_MODELS;
   }
+}
+
+function mergeModels(...groups: CodexModelRecord[][]): CodexModelRecord[] {
+  const seen = new Set<string>();
+  const merged: CodexModelRecord[] = [];
+
+  for (const group of groups) {
+    for (const model of group) {
+      if (seen.has(model.slug)) {
+        continue;
+      }
+      seen.add(model.slug);
+      merged.push(model);
+    }
+  }
+
+  return merged;
 }
 
 function mapThreadRow(row: ThreadRow): CodexThreadRecord {
@@ -198,6 +215,11 @@ function withDatabase<T>(fn: (db: DatabaseInstance) => T): T | null {
 }
 
 function getCodexDir(): string | null {
+  const codexHome = process.env.CODEX_HOME?.trim();
+  if (codexHome) {
+    return codexHome;
+  }
+
   const home = process.env.HOME?.trim();
   return home ? path.join(home, ".codex") : null;
 }

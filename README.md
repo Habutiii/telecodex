@@ -78,7 +78,7 @@ The bot will pass this to the Claude Code CLI process via the environment, bypas
    | `TELEGRAM_ALLOWED_USER_IDS` | ✅ | Comma-separated Telegram user IDs |
    | `TELECODEX_WORKSPACE_ROOT` | — | Default workspace root; `/new` can select this directory or direct subdirectories (defaults to the bot process cwd) |
    | `CODEX_API_KEY` | — | API key for Codex (alternative to ChatGPT login) |
-   | `CODEX_MODEL` | — | Default model, e.g. `gpt-5.4`, `o3` |
+   | `CODEX_MODEL` | — | Default model, e.g. `gpt-5.6-terra`, `gpt-5.6-luna` |
    | `CODEX_SANDBOX_MODE` | — | `read-only`, `workspace-write` *(default)*, `danger-full-access` |
    | `CODEX_APPROVAL_POLICY` | — | `never` *(default)*, `on-request`, `on-failure`, `untrusted` |
    | `CODEX_LAUNCH_PROFILES_JSON` | — | Optional JSON array of named launch profiles for `/launch_profiles` |
