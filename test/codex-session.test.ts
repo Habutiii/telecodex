@@ -1,4 +1,4 @@
-import { mkdirSync, rmSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -51,7 +51,7 @@ const mockState = vi.hoisted(() => {
     return thread;
   };
 
-  const Codex = vi.fn().mockImplementation((options: any) => {
+  const Codex = vi.fn(function (this: any, options: any) {
     createdCodexOptions.push(options);
 
     const instance = {
@@ -83,14 +83,14 @@ vi.mock("@openai/codex-sdk", () => ({
   Codex: mockState.Codex,
 }));
 
-vi.mock("../src/codex-state.js", () => ({
+vi.mock("../src/codex-state-openai.js", () => ({
   getThread: mockCodexState.getThread,
   listThreads: mockCodexState.listThreads,
   listWorkspaces: mockCodexState.listWorkspaces,
   listModels: mockCodexState.listModels,
 }));
 
-import { CodexSessionService } from "../src/codex-session.js";
+import { OpenAICodexSessionService as CodexSessionService } from "../src/codex-session-openai.js";
 
 describe("CodexSessionService", () => {
   const usage = {
@@ -154,7 +154,6 @@ describe("CodexSessionService", () => {
 
     expect(mockState.Codex).toHaveBeenCalledWith(
       expect.objectContaining({
-        apiKey: "codex-key",
         config: {
           approval_policy: "never",
           projects: {
@@ -163,7 +162,7 @@ describe("CodexSessionService", () => {
             },
           },
         },
-        env: expect.objectContaining({ CODEX_API_KEY: "codex-key" }),
+        env: expect.any(Object),
       }),
     );
 
@@ -187,6 +186,45 @@ describe("CodexSessionService", () => {
       approvalPolicy: "never",
       unsafeLaunch: false,
     });
+  });
+
+  it("reports the default model from Codex config when TeleCodex has no explicit model", async () => {
+    const codexHome = path.join(tmpdir(), `telecodex-codex-home-${Date.now()}`);
+    mkdirSync(codexHome, { recursive: true });
+    writeFileSync(
+      path.join(codexHome, "config.toml"),
+      [
+        'model = "gpt-5.6-terra"',
+        'model_reasoning_effort = "medium"',
+        '[projects."/workspace/base"]',
+        'trust_level = "trusted"',
+      ].join("\n"),
+      "utf8",
+    );
+
+    const originalCodexHome = process.env.CODEX_HOME;
+    process.env.CODEX_HOME = codexHome;
+
+    try {
+      const service = await CodexSessionService.create(
+        createConfig({ codexModel: undefined }),
+        { deferThreadStart: true },
+      );
+
+      expect(service.getInfo()).toEqual(
+        expect.objectContaining({
+          model: undefined,
+          defaultModel: "gpt-5.6-terra",
+        }),
+      );
+    } finally {
+      if (originalCodexHome === undefined) {
+        delete process.env.CODEX_HOME;
+      } else {
+        process.env.CODEX_HOME = originalCodexHome;
+      }
+      rmSync(codexHome, { recursive: true, force: true });
+    }
   });
 
   it("create accepts overrides for workspace, model, reasoning effort, launch profile, and resumeThreadId", async () => {

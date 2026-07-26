@@ -1473,7 +1473,8 @@ export function createBot(config: TeleCodexConfig, registry: SessionRegistry): B
       return;
     }
 
-    const currentModel = session.getInfo().model ?? "(default)";
+    const sessionInfo = session.getInfo();
+    const currentModel = sessionInfo.model ?? sessionInfo.defaultModel ?? "(default)";
     const modelButtons = models.map((model) => ({
       label: `${model.displayName}${model.slug === currentModel ? " ✓" : ""}`,
       callbackData: `model_${model.slug}`,
@@ -2324,7 +2325,7 @@ function renderSessionInfoPlain(info: CodexSessionInfo, { showProfile = true } =
     showProfile && info.nextLaunchProfileId
       ? `Next launch profile: ${info.nextLaunchProfileLabel} (${info.nextLaunchProfileBehavior})${info.nextUnsafeLaunch ? " [unsafe]" : ""}`
       : undefined,
-    info.model ? `Model: ${info.model}` : undefined,
+    sessionDisplayModel(info) ? `Model: ${sessionDisplayModel(info)}` : undefined,
     info.reasoningEffort ? `Reasoning effort: ${info.reasoningEffort}` : undefined,
     info.sessionTokens ? formatSessionTokensPlain(info.sessionTokens) : undefined,
   ]
@@ -2341,12 +2342,16 @@ function renderSessionInfoHTML(info: CodexSessionInfo, { showProfile = true } = 
     showProfile && info.nextLaunchProfileId
       ? `<b>Next launch profile:</b> <code>${escapeHTML(info.nextLaunchProfileLabel ?? "")}</code> <i>(${escapeHTML(info.nextLaunchProfileBehavior ?? "")})</i>${info.nextUnsafeLaunch ? " ⚠️" : ""}`
       : undefined,
-    info.model ? `<b>Model:</b> <code>${escapeHTML(info.model)}</code>` : undefined,
+    sessionDisplayModel(info) ? `<b>Model:</b> <code>${escapeHTML(sessionDisplayModel(info) ?? "")}</code>` : undefined,
     info.reasoningEffort ? `<b>Reasoning effort:</b> <code>${escapeHTML(info.reasoningEffort)}</code>` : undefined,
     info.sessionTokens ? `<b>Session tokens:</b> <code>${escapeHTML(formatSessionTokensValue(info.sessionTokens))}</code>` : undefined,
   ]
     .filter((line): line is string => Boolean(line))
     .join("\n");
+}
+
+function sessionDisplayModel(info: CodexSessionInfo): string | undefined {
+  return info.model ?? info.defaultModel;
 }
 
 function renderSessionSelectionMatch(

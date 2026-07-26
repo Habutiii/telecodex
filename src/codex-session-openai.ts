@@ -1,4 +1,4 @@
-import { readdirSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
 
 import {
@@ -44,6 +44,7 @@ export interface CodexSessionInfo {
   threadId: string | null;
   workspace: string;
   model?: string;
+  defaultModel?: string;
   reasoningEffort?: string;
   launchProfileId: string;
   launchProfileLabel: string;
@@ -121,6 +122,8 @@ export class OpenAICodexSessionService {
 
   getInfo(): CodexSessionInfo {
     const effectiveLaunchProfile = this.activeThreadLaunchProfile ?? this.currentLaunchProfile;
+    const configuredDefaultModel =
+      !this.currentModel && !this.config.codexModel ? readCodexConfiguredDefaultModel() : undefined;
     const info: CodexSessionInfo = {
       threadId: this.thread?.id ?? this.currentThreadId,
       workspace: this.currentWorkspace,
@@ -132,6 +135,10 @@ export class OpenAICodexSessionService {
       approvalPolicy: effectiveLaunchProfile.approvalPolicy,
       unsafeLaunch: effectiveLaunchProfile.unsafe,
     };
+
+    if (configuredDefaultModel) {
+      info.defaultModel = configuredDefaultModel;
+    }
 
     if (this.currentReasoningEffort) {
       info.reasoningEffort = this.currentReasoningEffort;
@@ -592,6 +599,31 @@ function buildCodexEnv(): Record<string, string> {
 
 function toTomlQuotedKey(value: string): string {
   return JSON.stringify(value);
+}
+
+function readCodexConfiguredDefaultModel(): string | undefined {
+  const configPath = getCodexConfigPath();
+  if (!configPath || !existsSync(configPath)) {
+    return undefined;
+  }
+
+  try {
+    const topLevelToml = readFileSync(configPath, "utf8").split(/^\s*\[/m, 1)[0] ?? "";
+    const match = topLevelToml.match(/^\s*model\s*=\s*["']([^"']+)["']/m);
+    return match?.[1]?.trim() || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function getCodexConfigPath(): string | undefined {
+  const codexHome = process.env.CODEX_HOME?.trim();
+  if (codexHome) {
+    return path.join(codexHome, "config.toml");
+  }
+
+  const home = process.env.HOME?.trim();
+  return home ? path.join(home, ".codex", "config.toml") : undefined;
 }
 
 function computeTextDelta(previousText: string, nextText: string): string {
