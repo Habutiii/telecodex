@@ -4,7 +4,8 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 git checkout main
-git pull origin main
+git fetch origin
+git reset --hard origin/main
 npm install
 npm audit fix --force
 npm run build
