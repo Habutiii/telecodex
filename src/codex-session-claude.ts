@@ -190,10 +190,10 @@ type ClaudeEvent =
 // ---------------------------------------------------------------------------
 
 export const CLAUDE_MODELS: CodexModelRecord[] = [
+  { slug: "claude-fable-5", displayName: "Claude Fable 5" },
   { slug: "claude-opus-4-8", displayName: "Claude Opus 4.8" },
   { slug: "claude-sonnet-4-6", displayName: "Claude Sonnet 4.6" },
-  { slug: "claude-haiku-4-5", displayName: "Claude Haiku 4.5" },
-  { slug: "claude-opus-4-7", displayName: "Claude Opus 4.7" },
+  { slug: "claude-haiku-4-5-20251001", displayName: "Claude Haiku 4.5" },
 ];
 
 // ---------------------------------------------------------------------------
