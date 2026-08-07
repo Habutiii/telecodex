@@ -633,7 +633,7 @@ function buildClaudeArgs(
     args.push("--dangerously-skip-permissions");
   }
 
-  args.push(prompt);
+  args.push("--", prompt);
   return args;
 }
 
