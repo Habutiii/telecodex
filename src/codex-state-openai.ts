@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
 
 export interface CodexThreadRecord {
@@ -19,11 +19,8 @@ export interface CodexModelRecord {
 export const FALLBACK_MODELS: CodexModelRecord[] = [
   { slug: "gpt-5.6-terra", displayName: "GPT-5.6 Terra" },
   { slug: "gpt-5.6-luna", displayName: "GPT-5.6 Luna" },
-  { slug: "gpt-5", displayName: "GPT-5" },
-  { slug: "o4-mini", displayName: "o4-mini" },
-  { slug: "o3", displayName: "o3" },
-  { slug: "o3-mini", displayName: "o3-mini" },
-  { slug: "gpt-4o", displayName: "GPT-4o" },
+  { slug: "gpt-6-sol", displayName: "GPT-6 Sol" },
+  { slug: "gpt-6-luna", displayName: "GPT-6 Luna" },
 ];
 
 type DatabaseCtor = new (
@@ -131,46 +128,7 @@ export function listWorkspaces(): string[] {
 }
 
 export function listModels(): CodexModelRecord[] {
-  const modelsPath = getModelsCachePath();
-  if (!modelsPath || !existsSync(modelsPath)) {
-    return FALLBACK_MODELS;
-  }
-
-  try {
-    const payload = JSON.parse(readFileSync(modelsPath, "utf8")) as {
-      models?: Array<{ slug?: unknown; display_name?: unknown; visibility?: unknown }>;
-    };
-
-    const models = (payload.models ?? [])
-      .filter((model) => model && typeof model === "object")
-      .filter((model) => model.visibility !== "hidden")
-      .map((model) => ({
-        slug: typeof model.slug === "string" ? model.slug : "",
-        displayName: typeof model.display_name === "string" ? model.display_name : "",
-      }))
-      .filter((model) => model.slug && model.displayName);
-
-    return models.length > 0 ? mergeModels(FALLBACK_MODELS, models) : FALLBACK_MODELS;
-  } catch {
-    return FALLBACK_MODELS;
-  }
-}
-
-function mergeModels(...groups: CodexModelRecord[][]): CodexModelRecord[] {
-  const seen = new Set<string>();
-  const merged: CodexModelRecord[] = [];
-
-  for (const group of groups) {
-    for (const model of group) {
-      if (seen.has(model.slug)) {
-        continue;
-      }
-      seen.add(model.slug);
-      merged.push(model);
-    }
-  }
-
-  return merged;
+  return FALLBACK_MODELS;
 }
 
 function mapThreadRow(row: ThreadRow): CodexThreadRecord {
@@ -222,9 +180,4 @@ function getCodexDir(): string | null {
 
   const home = process.env.HOME?.trim();
   return home ? path.join(home, ".codex") : null;
-}
-
-function getModelsCachePath(): string | null {
-  const codexDir = getCodexDir();
-  return codexDir ? path.join(codexDir, "models_cache.json") : null;
 }

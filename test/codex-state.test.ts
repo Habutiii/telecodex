@@ -276,7 +276,7 @@ describe("codex-state", () => {
     expect(state.listWorkspaces()).toEqual(["/workspace/a", "/workspace/z"]);
   });
 
-  it("listModels merges fallback models with models_cache.json and filters hidden models", async () => {
+  it("listModels exposes only the curated model options", async () => {
     const state = await loadCodexState({
       modelsJson: JSON.stringify({
         models: [
@@ -290,12 +290,8 @@ describe("codex-state", () => {
     expect(state.listModels()).toEqual([
       { slug: "gpt-5.6-terra", displayName: "GPT-5.6 Terra" },
       { slug: "gpt-5.6-luna", displayName: "GPT-5.6 Luna" },
-      { slug: "gpt-5", displayName: "GPT-5" },
-      { slug: "o4-mini", displayName: "o4-mini" },
-      { slug: "o3", displayName: "o3" },
-      { slug: "o3-mini", displayName: "o3-mini" },
-      { slug: "gpt-4o", displayName: "GPT-4o" },
-      { slug: "gpt-5.4", displayName: "GPT-5.4" },
+      { slug: "gpt-6-sol", displayName: "GPT-6 Sol" },
+      { slug: "gpt-6-luna", displayName: "GPT-6 Luna" },
     ]);
   });
 
@@ -307,7 +303,7 @@ describe("codex-state", () => {
     expect(invalidState.listModels()).toEqual(invalidState.FALLBACK_MODELS);
   });
 
-  it("listModels reads models_cache.json from CODEX_HOME when set", async () => {
+  it("listModels ignores models_cache.json so the picker remains curated", async () => {
     const state = await loadCodexState({
       codexHome: "/home/codex/.codex",
       modelsJson: JSON.stringify({
@@ -315,7 +311,7 @@ describe("codex-state", () => {
       }),
     });
 
-    expect(state.listModels()[0]).toEqual({ slug: "gpt-5.6-terra", displayName: "GPT-5.6 Terra" });
+    expect(state.listModels()).toEqual(state.FALLBACK_MODELS);
   });
 
   it("getThread returns null when not found", async () => {
