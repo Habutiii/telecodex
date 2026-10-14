@@ -122,7 +122,6 @@ describe("CodexSessionService", () => {
     defaultLaunchProfileId: "default",
     enableUnsafeLaunchProfiles: false,
     toolVerbosity: "summary",
-    showTurnTokenUsage: false,
     enableTelegramReactions: false,
     ...overrides,
   });
@@ -154,14 +153,14 @@ describe("CodexSessionService", () => {
 
     expect(mockState.Codex).toHaveBeenCalledWith(
       expect.objectContaining({
-        config: {
+        config: expect.objectContaining({
           approval_policy: "never",
           projects: {
             "\"/workspace/base\"": {
               trust_level: "untrusted",
             },
           },
-        },
+        }),
         env: expect.any(Object),
       }),
     );
@@ -185,6 +184,26 @@ describe("CodexSessionService", () => {
       sandboxMode: "workspace-write",
       approvalPolicy: "never",
       unsafeLaunch: false,
+    });
+  });
+
+  it("configures the isolated Chrome DevTools MCP server", async () => {
+    await CodexSessionService.create(createConfig());
+
+    expect(mockState.createdCodexOptions[0]?.config).toMatchObject({
+      mcp_servers: {
+        chrome_devtools: {
+          command: "npx",
+          args: [
+            "-y",
+            "chrome-devtools-mcp@latest",
+            "--headless=true",
+            "--isolated=true",
+            "--usageStatistics=false",
+          ],
+          startup_timeout_sec: 20,
+        },
+      },
     });
   });
 
@@ -259,7 +278,7 @@ describe("CodexSessionService", () => {
       unsafeLaunch: false,
     });
 
-    expect(mockState.createdCodexOptions[0]?.config).toEqual({
+    expect(mockState.createdCodexOptions[0]?.config).toMatchObject({
       approval_policy: "never",
       projects: {
         "\"/workspace/base/resumed\"": {
@@ -290,7 +309,7 @@ describe("CodexSessionService", () => {
 
     await service.newThread("/workspace/base/other");
 
-    expect(mockState.createdCodexOptions[0]?.config).toEqual({
+    expect(mockState.createdCodexOptions[0]?.config).toMatchObject({
       approval_policy: "never",
       projects: {
         "\"/workspace/base\"": {
@@ -298,7 +317,7 @@ describe("CodexSessionService", () => {
         },
       },
     });
-    expect(mockState.createdCodexOptions[1]?.config).toEqual({
+    expect(mockState.createdCodexOptions[1]?.config).toMatchObject({
       approval_policy: "never",
       projects: {
         "\"/workspace/base/other\"": {

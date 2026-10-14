@@ -273,9 +273,7 @@ export class OpenAICodexSessionService {
             break;
           }
           case "turn.completed": {
-            // Accumulate and deliver usage BEFORE onAgentEnd so that
-            // finalizeResponse() can read lastTurnUsage when building the
-            // final message text.
+            // Accumulate usage for session reporting before the turn ends.
             const u = event.usage;
             this.sessionTokens.input += u.input_tokens;
             this.sessionTokens.cached += u.cached_input_tokens;
@@ -516,6 +514,19 @@ export class OpenAICodexSessionService {
         projects: {
           [toTomlQuotedKey(this.currentWorkspace)]: {
             trust_level: "untrusted",
+          },
+        },
+        mcp_servers: {
+          chrome_devtools: {
+            command: "npx",
+            args: [
+              "-y",
+              "chrome-devtools-mcp@latest",
+              "--headless=true",
+              "--isolated=true",
+              "--usageStatistics=false",
+            ],
+            startup_timeout_sec: 20,
           },
         },
       },

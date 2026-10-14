@@ -1,4 +1,4 @@
-import { formatToolSummaryLine, formatTurnUsageLine, summarizeToolName } from "../src/bot.js";
+import { formatToolSummaryLine, summarizeToolName } from "../src/bot.js";
 
 describe("tool summary formatting", () => {
   it("normalizes raw tool names into compact summary categories", () => {
@@ -22,13 +22,4 @@ describe("tool summary formatting", () => {
     );
   });
 
-  it("keeps the turn usage line format stable when enabled", () => {
-    expect(
-      formatTurnUsageLine({
-        inputTokens: 12,
-        cachedInputTokens: 3,
-        outputTokens: 9,
-      }),
-    ).toBe("🪙 in: 12 · cached: 3 · out: 9");
-  });
 });

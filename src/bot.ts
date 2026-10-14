@@ -542,7 +542,6 @@ export function createBot(config: TeleCodexConfig, registry: SessionRegistry): B
     let planMessageId: number | undefined;
     let lastRenderedPlan = "";
     let planMessageSending = false;
-    let lastTurnUsage: { inputTokens: number; cachedInputTokens: number; outputTokens: number } | undefined;
 
     const typingInterval = setInterval(() => {
       void bot.api
@@ -575,21 +574,15 @@ export function createBot(config: TeleCodexConfig, registry: SessionRegistry): B
 
     const buildFinalResponseText = (text: string): string => {
       const trimmedText = text.trim();
-      const usageLine =
-        config.showTurnTokenUsage && lastTurnUsage ? formatTurnUsageLine(lastTurnUsage) : "";
 
       if (toolVerbosity === "summary") {
-        const footerLines = [formatToolSummaryLine(toolCounts), usageLine].filter((line): line is string => Boolean(line));
+        const footerLines = [formatToolSummaryLine(toolCounts)].filter((line): line is string => Boolean(line));
         if (footerLines.length === 0) {
           return trimmedText;
         }
 
         const footer = footerLines.join("\n");
         return trimmedText ? `${trimmedText}\n\n${footer}` : footer;
-      }
-
-      if (toolVerbosity === "all" && usageLine) {
-        return trimmedText ? `${trimmedText}\n\n${usageLine}` : usageLine;
       }
 
       return trimmedText;
@@ -892,9 +885,6 @@ export function createBot(config: TeleCodexConfig, registry: SessionRegistry): B
             console.error("Failed to update plan message", err);
           });
         }
-      },
-      onTurnComplete: (usage) => {
-        lastTurnUsage = usage;
       },
       onAgentEnd: () => {
         void finalizeResponse().catch((error) => {
@@ -2475,10 +2465,6 @@ function renderTodoList(items: Array<{ text: string; completed: boolean }>): str
     return `${icon} ${escapeHTML(item.text)}`;
   });
   return `📋 <b>Plan</b>\n${lines.join("\n")}`;
-}
-
-export function formatTurnUsageLine(usage: { inputTokens: number; cachedInputTokens: number; outputTokens: number }): string {
-  return `🪙 in: ${usage.inputTokens} · cached: ${usage.cachedInputTokens} · out: ${usage.outputTokens}`;
 }
 
 export function summarizeToolName(toolName: string): string {
