@@ -74,9 +74,11 @@ vi.mock("node:fs", () => ({
 }));
 
 vi.mock("../src/codex-session.js", () => ({
-  CodexSessionService: {
-    create: mockSessionState.create,
-  },
+  createSessionService: async (
+    _agentType: unknown,
+    config: TeleCodexConfig,
+    options: unknown,
+  ) => mockSessionState.create(config, options),
 }));
 
 import { SessionRegistry } from "../src/session-registry.js";
@@ -310,9 +312,17 @@ describe("SessionRegistry", () => {
   it("can replace an existing session when starting a fresh new-thread flow", async () => {
     const registry = new SessionRegistry(createConfig());
     const first = await registry.getOrCreate("123");
+    first.setInfo({
+      threadId: "thread-a",
+      workspace: "/workspace/old",
+      model: "o4-mini",
+      reasoningEffort: "low",
+      launchProfileId: "readonly",
+    });
+    registry.updateMetadata("123", first);
     const second = await registry.getOrCreate("123", {
       deferThreadStart: true,
-      ignoreMetadata: true,
+      startFresh: true,
       replaceExisting: true,
     });
 
@@ -320,10 +330,38 @@ describe("SessionRegistry", () => {
     expect(first.dispose).toHaveBeenCalledTimes(1);
     expect(mockSessionState.create).toHaveBeenCalledTimes(2);
     expect(mockSessionState.create).toHaveBeenLastCalledWith(createConfig(), {
-      workspace: undefined,
-      model: undefined,
-      reasoningEffort: undefined,
-      launchProfileId: undefined,
+      workspace: "/workspace/old",
+      model: "o4-mini",
+      reasoningEffort: "low",
+      launchProfileId: "readonly",
+      deferThreadStart: true,
+      resumeThreadId: undefined,
+    });
+  });
+
+  it("starts fresh from persisted settings without resuming the previous thread", async () => {
+    const persistPath = path.join("/workspace/base", ".telecodex", "contexts.json");
+    mockFsState.files.set(
+      persistPath,
+      JSON.stringify([{
+        contextKey: "123",
+        threadId: "thread-a",
+        workspace: "/workspace/old",
+        model: "gpt-6-sol",
+        reasoningEffort: "high",
+        launchProfileId: "readonly",
+        updatedAt: 10,
+      }]),
+    );
+
+    const registry = new SessionRegistry(createConfig());
+    await registry.getOrCreate("123", { deferThreadStart: true, startFresh: true });
+
+    expect(mockSessionState.create).toHaveBeenCalledWith(createConfig(), {
+      workspace: "/workspace/old",
+      model: "gpt-6-sol",
+      reasoningEffort: "high",
+      launchProfileId: "readonly",
       deferThreadStart: true,
       resumeThreadId: undefined,
     });
@@ -583,7 +621,7 @@ describe("SessionRegistry", () => {
 
   it("persists metadata and reloads it in a new registry", async () => {
     const config = createConfig();
-    const persistPath = path.join(config.workspace, ".telecodex", "contexts.json");
+    const persistPath = path.join(config.workspace, ".telecodex", "contexts-codex.json");
     const registry = new SessionRegistry(config);
     const session = (await registry.getOrCreate("123")) as any;
 

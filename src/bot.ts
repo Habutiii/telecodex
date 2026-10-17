@@ -1172,7 +1172,7 @@ export function createBot(config: TeleCodexConfig, registry: SessionRegistry): B
 
     const session = await registry.getOrCreate(contextKey, {
       deferThreadStart: true,
-      ignoreMetadata: true,
+      startFresh: true,
       replaceExisting: true,
     });
     const workspaces = listWorkspaceDirectories(config.workspaceRoot);

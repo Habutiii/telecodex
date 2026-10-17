@@ -21,6 +21,8 @@ export interface ContextMetadata {
 export interface GetOrCreateSessionOptions {
   deferThreadStart?: boolean;
   ignoreMetadata?: boolean;
+  /** Start without resuming the saved thread, while retaining its selected settings. */
+  startFresh?: boolean;
   replaceExisting?: boolean;
 }
 
@@ -101,8 +103,8 @@ export class SessionRegistry {
         model: meta?.model,
         reasoningEffort: meta?.reasoningEffort,
         launchProfileId,
-        deferThreadStart: options?.deferThreadStart && !meta?.threadId,
-        resumeThreadId: meta?.threadId ?? undefined,
+        deferThreadStart: options?.deferThreadStart && (!meta?.threadId || options?.startFresh),
+        resumeThreadId: options?.startFresh ? undefined : meta?.threadId ?? undefined,
       });
 
       if ((this.creationVersions.get(contextKey) ?? 0) !== requestVersion) {
